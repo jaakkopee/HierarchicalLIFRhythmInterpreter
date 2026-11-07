@@ -93,10 +93,12 @@ class LIFNN:
         )
         self.density = 0.58
         self.chaos = 0.36
+        self.audio_knob_follow = True
+        self.audio_knob_mix = 0.70
+        self.audio_density_smoothing = 0.85
+        self.audio_chaos_smoothing = 0.80
         self._open_midi_output()
-        self.audio_input = AudioInput()  # Initialize the audio input handler.
-        self.latest_audio_input = np.zeros(1024)  # Initialize the latest audio input buffer.
-        self.audio_input.start()  # Start capturing audio input.
+        self.audio_input = AudioInput()
     
     def _build_scale_notes(self, scale_name, root_note):
         if scale_name == "drums":
@@ -147,6 +149,32 @@ class LIFNN:
         if chaos is not None:
             self.chaos = float(np.clip(float(chaos), 0.0, 1.0))
         print(f"Knobs => density={self.density:.2f} chaos={self.chaos:.2f}")
+
+    def set_audio_knob_follow(self, enabled=None, mix=None):
+        if enabled is not None:
+            self.audio_knob_follow = bool(enabled)
+        if mix is not None:
+            self.audio_knob_mix = float(np.clip(float(mix), 0.0, 1.0))
+        print(f"Audio knob follow => {self.audio_knob_follow} mix={self.audio_knob_mix:.2f}")
+
+    def _update_knobs_from_audio(self):
+        if not self.audio_knob_follow:
+            return
+
+        features = self.audio_input.get_features()
+        energy = features["energy"]
+        flux = features["flux"]
+
+        density_target = float(np.clip(0.10 + 1.15 * energy, 0.0, 1.0))
+        chaos_target = float(np.clip(0.05 + 1.35 * flux, 0.0, 1.0))
+
+        blended_density = (1.0 - self.audio_knob_mix) * self.density + self.audio_knob_mix * density_target
+        blended_chaos = (1.0 - self.audio_knob_mix) * self.chaos + self.audio_knob_mix * chaos_target
+
+        self.density = self.audio_density_smoothing * self.density + (1.0 - self.audio_density_smoothing) * blended_density
+        self.chaos = self.audio_chaos_smoothing * self.chaos + (1.0 - self.audio_chaos_smoothing) * blended_chaos
+        self.density = float(np.clip(self.density, 0.0, 1.0))
+        self.chaos = float(np.clip(self.chaos, 0.0, 1.0))
     # Build the alternating weights matrix for the network.
     def _build_alternating_weights(self):
         weights = torch.empty((self.num_cells, self.num_cells), dtype=torch.float32)
@@ -161,9 +189,10 @@ class LIFNN:
         return weights
     # Compute the oscillating drive for the network based on the input value.
     def _oscillating_drive(self, input_value):
-        # Get the 16-band FFT representation of the input.
+        # Blend manual/control input with live audio spectral magnitude.
         input_fft = self.audio_input.get_input_fft_16bands()
-        input_value = np.mean(input_fft)
+        audio_value = float(np.mean(input_fft)) if np.size(input_fft) else 0.0
+        input_value = float(input_value) + 0.65 * audio_value
         # Normalize the input value and compute the phase speed for oscillation.
         input_norm = float(torch.tanh(torch.tensor(float(input_value), dtype=torch.float32) / 6.0).item())
         phase_speed = self.base_phase_step * (1.0 + 0.8 * input_norm)
@@ -331,6 +360,7 @@ class LIFNN:
 
     def update(self, input_value):
         # Update the network state based on the input value and internal dynamics.
+        self._update_knobs_from_audio()
         
         # Normalize the input value and compute the external and recurrent drives.
         input_norm = float(torch.tanh(torch.tensor(float(input_value), dtype=torch.float32) / 6.0).item())
@@ -386,6 +416,8 @@ class LIFNN:
 
     def close(self):
         self.all_notes_off()
+        if hasattr(self, "audio_input") and self.audio_input is not None:
+            self.audio_input.stop()
         close_port = getattr(self.midi_out, "closePort", None)
         close_port_snake = getattr(self.midi_out, "close_port", None)
         close_method = getattr(self.midi_out, "close", None)
@@ -401,40 +433,79 @@ class LIFNN:
         self.lock = None
 
 class AudioInput:
-    def __init__(self):
-        # Initialize the audio input system.
-        self.audio_stream = sd.InputStream(callback=self._audio_callback)
-        self.audio_stream.start()
-        self.latest_audio_input = None
+    def __init__(self, blocksize=1024):
+        self.blocksize = blocksize
+        self.latest_audio_input = np.zeros((blocksize, 1), dtype=np.float32)
+        self.prev_bands = np.zeros(16, dtype=np.float32)
+        self.audio_stream = None
+        self.available = False
+        self.start()
 
     def _audio_callback(self, indata, frames, time, status):
-        # Process the incoming audio data.
         if status:
             print(f"Audio input status: {status}")
-        # Here you could store the audio data for later retrieval in get_input.
         self.latest_audio_input = indata.copy()
 
     def get_input_fft_16bands(self):
-        # Return the next audio input fft value.
-        if hasattr(self, "latest_audio_input") and self.latest_audio_input is not None:
-            # Convert the FFT result to a list of magnitudes in 16 bands.
-            fft_result = np.fft.rfft(self.latest_audio_input, axis=0)
-            bands16 = [np.mean(np.abs(fft_result[i::16])) for i in range(16)]
-            bands16 = np.array(bands16)  # Convert to numpy array for consistency
-            #use only the magnitude of the FFT result for each band
-            bands16 = np.abs(bands16)
-            return bands16
-        
-        return 0.0
+        if self.latest_audio_input is None:
+            return np.zeros(16, dtype=np.float32)
+
+        fft_result = np.fft.rfft(self.latest_audio_input, axis=0)
+        bands16 = np.array([np.mean(np.abs(fft_result[i::16])) for i in range(16)], dtype=np.float32)
+        return np.abs(bands16)
+
+    def get_features(self):
+        if not self.available:
+            return {"energy": 0.0, "flux": 0.0}
+
+        frame = self.latest_audio_input
+        if frame is None:
+            return {"energy": 0.0, "flux": 0.0}
+
+        mono = frame[:, 0] if frame.ndim > 1 else frame
+        rms = float(np.sqrt(np.mean(np.square(mono, dtype=np.float32), dtype=np.float32)))
+        energy = float(np.clip(rms * 8.0, 0.0, 1.0))
+
+        bands = self.get_input_fft_16bands()
+        band_sum = float(np.sum(bands))
+        if band_sum > 1e-12:
+            normalized = bands / band_sum
+        else:
+            normalized = np.zeros_like(bands)
+
+        flux = float(np.mean(np.abs(normalized - self.prev_bands)))
+        flux = float(np.clip(flux * 6.0, 0.0, 1.0))
+        self.prev_bands = normalized
+        return {"energy": energy, "flux": flux}
 
     def start(self):
-        if hasattr(self, "audio_input") and self.audio_input is not None:
-            self.audio_input.audio_stream.start()
+        if self.audio_stream is not None:
+            return
+        try:
+            self.audio_stream = sd.InputStream(callback=self._audio_callback, blocksize=self.blocksize)
+            self.audio_stream.start()
+            self.available = True
+            print("Audio input started.")
+        except sd.PortAudioError as exc:
+            self.available = False
+            self.audio_stream = None
+            print(f"Audio input unavailable: {exc}")
+
+    def stop(self):
+        if self.audio_stream is None:
+            return
+        self.audio_stream.stop()
+        self.audio_stream.close()
+        self.audio_stream = None
+        self.available = False
 
 if __name__ == "__main__":
     print("Tip: set LIFNN_MIDI_PORT to part of the desired output name, e.g. LIFNN_MIDI_PORT=IAC")
     lifnn = LIFNN()
-    print("Commands: blank=auto, auto N, density X, chaos X, knobs D C, scale NAME [ROOT], scales, show, q")
+    print(
+        "Commands: blank=auto, auto N, density X, chaos X, knobs D C, "
+        "scale NAME [ROOT], scales, audiofollow on|off [mix], show, q"
+    )
     lifnn.set_knobs(lifnn.density, lifnn.chaos)
     lifnn.set_scale(lifnn.scale_name, lifnn.root_note)
     try:
@@ -448,6 +519,7 @@ if __name__ == "__main__":
             if raw_value.lower() == "show":
                 lifnn.set_knobs(lifnn.density, lifnn.chaos)
                 lifnn.set_scale(lifnn.scale_name, lifnn.root_note)
+                lifnn.set_audio_knob_follow(lifnn.audio_knob_follow, lifnn.audio_knob_mix)
                 continue
             if raw_value == "":
                 lifnn.run_auto()
@@ -487,6 +559,18 @@ if __name__ == "__main__":
                     continue
                 root = lifnn.root_note if len(parts) == 2 else int(parts[2])
                 lifnn.set_scale(scale_name=parts[1], root_note=root)
+                continue
+            if raw_value.lower().startswith("audiofollow"):
+                parts = raw_value.split()
+                if len(parts) not in {2, 3}:
+                    print("Usage: audiofollow on|off [mix 0..1]")
+                    continue
+                enabled = parts[1].lower()
+                if enabled not in {"on", "off"}:
+                    print("Usage: audiofollow on|off [mix 0..1]")
+                    continue
+                mix = lifnn.audio_knob_mix if len(parts) == 2 else float(parts[2])
+                lifnn.set_audio_knob_follow(enabled == "on", mix)
                 continue
             input_value = float(raw_value)
             lifnn.update(input_value)

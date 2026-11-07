@@ -2,7 +2,7 @@
 
 This project is a Norse-based rhythmic MIDI generator built around a small recurrent LIF network.
 
-Current main script: `LIFFM.py`.
+Current main script: `LIFMIDI.py`.
 
 ## What it does
 
@@ -11,6 +11,7 @@ Current main script: `LIFFM.py`.
 - drives the network with oscillatory + stochastic input
 - emits MIDI note on/off events when neurons spike
 - supports live control for rhythm density, chaos, and musical scale
+- supports audio-reactive control where input audio drives density/stochasticity
 
 ## Requirements
 
@@ -29,13 +30,13 @@ pip install torch norse numpy python-rtmidi
 ## Running
 
 ```bash
-python3 LIFFM.py
+python3 LIFMIDI.py
 ```
 
 Optional: force a MIDI output by name match:
 
 ```bash
-LIFNN_MIDI_PORT=IAC python3 LIFFM.py
+LIFNN_MIDI_PORT=IAC python3 LIFMIDI.py
 ```
 
 On startup, the script prints available MIDI output ports and opens one.
@@ -47,6 +48,7 @@ On startup, the script prints available MIDI output ports and opens one.
 - `density X`: set density knob (`0.0..1.0`)
 - `chaos X`: set chaos knob (`0.0..1.0`)
 - `knobs D C`: set both knobs
+- `audiofollow on|off [mix]`: enable/disable audio-driven chaos+density (`mix` in `0..1`)
 - `scale NAME`: set scale
 - `scale NAME ROOT`: set scale and root MIDI note (`0..127`)
 - `scales`: list available scales
@@ -79,6 +81,7 @@ Built-in scale names:
 - The network has rhythmic gating, slow modulation, and anti-silence recovery to avoid dead states.
 - `density` mainly affects activity level and gate duty.
 - `chaos` mainly affects randomness and pattern variability.
+- `audiofollow` maps audio energy to density and spectral flux to chaos.
 
 ## Quick starting presets
 
