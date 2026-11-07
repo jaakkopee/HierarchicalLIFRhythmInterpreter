@@ -94,7 +94,10 @@ class LIFNN:
         self.density = 0.58
         self.chaos = 0.36
         self._open_midi_output()
-
+        self.audio_input = AudioInput()  # Initialize the audio input handler.
+        self.latest_audio_input = np.zeros(1024)  # Initialize the latest audio input buffer.
+        self.audio_input.start()  # Start capturing audio input.
+    
     def _build_scale_notes(self, scale_name, root_note):
         if scale_name == "drums":
             notes = []
@@ -158,6 +161,9 @@ class LIFNN:
         return weights
     # Compute the oscillating drive for the network based on the input value.
     def _oscillating_drive(self, input_value):
+        # Get the 16-band FFT representation of the input.
+        input_fft = self.audio_input.get_input_fft_16bands()
+        input_value = np.mean(input_fft)
         # Normalize the input value and compute the phase speed for oscillation.
         input_norm = float(torch.tanh(torch.tensor(float(input_value), dtype=torch.float32) / 6.0).item())
         phase_speed = self.base_phase_step * (1.0 + 0.8 * input_norm)
@@ -325,6 +331,7 @@ class LIFNN:
 
     def update(self, input_value):
         # Update the network state based on the input value and internal dynamics.
+        
         # Normalize the input value and compute the external and recurrent drives.
         input_norm = float(torch.tanh(torch.tensor(float(input_value), dtype=torch.float32) / 6.0).item())
         # Compute the normalized input and the external oscillating drive.
@@ -393,6 +400,36 @@ class LIFNN:
             print("Warning: MIDI output object has no close method.")
         self.lock = None
 
+class AudioInput:
+    def __init__(self):
+        # Initialize the audio input system.
+        self.audio_stream = sd.InputStream(callback=self._audio_callback)
+        self.audio_stream.start()
+        self.latest_audio_input = None
+
+    def _audio_callback(self, indata, frames, time, status):
+        # Process the incoming audio data.
+        if status:
+            print(f"Audio input status: {status}")
+        # Here you could store the audio data for later retrieval in get_input.
+        self.latest_audio_input = indata.copy()
+
+    def get_input_fft_16bands(self):
+        # Return the next audio input fft value.
+        if hasattr(self, "latest_audio_input") and self.latest_audio_input is not None:
+            # Convert the FFT result to a list of magnitudes in 16 bands.
+            fft_result = np.fft.rfft(self.latest_audio_input, axis=0)
+            bands16 = [np.mean(np.abs(fft_result[i::16])) for i in range(16)]
+            bands16 = np.array(bands16)  # Convert to numpy array for consistency
+            #use only the magnitude of the FFT result for each band
+            bands16 = np.abs(bands16)
+            return bands16
+        
+        return 0.0
+
+    def start(self):
+        if hasattr(self, "audio_input") and self.audio_input is not None:
+            self.audio_input.audio_stream.start()
 
 if __name__ == "__main__":
     print("Tip: set LIFNN_MIDI_PORT to part of the desired output name, e.g. LIFNN_MIDI_PORT=IAC")
