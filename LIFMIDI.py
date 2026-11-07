@@ -26,7 +26,27 @@ SCALES = {
     "locrian": [0, 1, 3, 5, 6, 8, 10],
     "whole_tone": [0, 2, 4, 6, 8, 10],
     "chromatic": list(range(12)),
+    "drums": [],
 }
+
+GM_DRUM_NOTES = [
+    36,  # Bass Drum 1
+    38,  # Acoustic Snare
+    42,  # Closed Hi-Hat
+    46,  # Open Hi-Hat
+    41,  # Low Floor Tom
+    43,  # High Floor Tom
+    45,  # Low Tom
+    47,  # Low-Mid Tom
+    48,  # Hi-Mid Tom
+    50,  # High Tom
+    49,  # Crash Cymbal 1
+    51,  # Ride Cymbal 1
+    39,  # Hand Clap
+    37,  # Side Stick
+    54,  # Tambourine
+    56,  # Cowbell
+]
 
 # a LIF neural network with MIDI output.
 class LIFNN:
@@ -44,6 +64,9 @@ class LIFNN:
         self.scale_name = "minor_pentatonic"
         self.root_note = 36
         self.notes = self._build_scale_notes(self.scale_name, self.root_note)
+        self.melodic_channel = 0
+        self.drum_channel = 9
+        self.midi_channel = self.melodic_channel
         self.midi_out = midi_out
         self.active_notes = set()
         # Initialize the spike trace, recurrent weights, and other network parameters.
@@ -73,6 +96,14 @@ class LIFNN:
         self._open_midi_output()
 
     def _build_scale_notes(self, scale_name, root_note):
+        if scale_name == "drums":
+            notes = []
+            idx = 0
+            while len(notes) < self.num_cells:
+                notes.append(GM_DRUM_NOTES[idx % len(GM_DRUM_NOTES)])
+                idx += 1
+            return notes
+
         intervals = SCALES[scale_name]
         notes = []
         octave = 0
@@ -98,10 +129,14 @@ class LIFNN:
             self.scale_name = normalized
         if root_note is not None:
             self.root_note = int(np.clip(int(root_note), 0, 127))
+        self.midi_channel = self.drum_channel if self.scale_name == "drums" else self.melodic_channel
 
         self.all_notes_off()
         self.notes = self._build_scale_notes(self.scale_name, self.root_note)
-        print(f"Scale => {self.scale_name} root={self.root_note} notes={self.notes}")
+        print(
+            f"Scale => {self.scale_name} root={self.root_note} "
+            f"channel={self.midi_channel + 1} notes={self.notes}"
+        )
 
     def set_knobs(self, density=None, chaos=None):
         if density is not None:
@@ -271,21 +306,21 @@ class LIFNN:
         # Trigger a note-on event for the specified note if it is not already active.
         with self.lock:
             if note not in self.active_notes:
-                self._send_midi(0x90, note, 127)
+                self._send_midi(0x90 | self.midi_channel, note, 127)
                 self.active_notes.add(note)
 
     def note_off(self, note):
         # Trigger a note-off event for the specified note if it is currently active.
         with self.lock:
             if note in self.active_notes:
-                self._send_midi(0x80, note, 0)
+                self._send_midi(0x80 | self.midi_channel, note, 0)
                 self.active_notes.remove(note)
 
     def all_notes_off(self):
         # Turn off all currently active notes.
         with self.lock:
             for note in list(self.active_notes):
-                self._send_midi(0x80, note, 0)
+                self._send_midi(0x80 | self.midi_channel, note, 0)
                 self.active_notes.remove(note)
 
     def update(self, input_value):

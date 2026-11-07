@@ -71,6 +71,7 @@ Built-in scale names:
 - `locrian`
 - `whole_tone`
 - `chromatic`
+- `drums` (GM drum mapping on MIDI channel 10)
 
 ## Model behavior notes
 
@@ -86,6 +87,7 @@ Built-in scale names:
 - Glitchier texture: `knobs 0.75 0.80`
 - Minor pentatonic bass area: `scale minor_pentatonic 36`
 - Brighter modal feel: `scale lydian 48`
+- GM percussion kit: `scale drums`
 
 ## Notes
 
