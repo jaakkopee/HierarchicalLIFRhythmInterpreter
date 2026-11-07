@@ -31,17 +31,22 @@ SCALES = {
 # a LIF neural network with MIDI output.
 class LIFNN:
     def __init__(self, num_cells=16):
+        # Initialize the LIF neural network with the specified number of cells.
         self.lif_cells = [LIFCell() for _ in range(num_cells)]
+        # Initialize the states and outputs for each LIF cell.
         self.states = [cell.initial_state(torch.zeros(1)) for cell in self.lif_cells]
+        # output for each LIF cell. Initially set to zero.
         self.outputs = [torch.zeros(1) for _ in self.lif_cells]
         self.num_cells = len(self.lif_cells)
+        # Initialize the input, lock, scale, root note, and MIDI output.
         self.input = torch.zeros(1)
-        self.lock = threading.Lock()
+        self.lock = threading.Lock() # Lock for thread-safe operations on the network.
         self.scale_name = "minor_pentatonic"
         self.root_note = 36
         self.notes = self._build_scale_notes(self.scale_name, self.root_note)
         self.midi_out = midi_out
         self.active_notes = set()
+        # Initialize the spike trace, recurrent weights, and other network parameters.
         self.spike_trace = torch.zeros(self.num_cells, dtype=torch.float32)
         self.trace_decay = 0.82
         self.recurrent_weights = self._build_alternating_weights()
@@ -72,13 +77,15 @@ class LIFNN:
         notes = []
         octave = 0
         idx = 0
+        # Build the scale notes based on the specified scale and root note.
         while len(notes) < self.num_cells:
             note = root_note + intervals[idx] + (12 * octave)
             notes.append(int(np.clip(note, 0, 127)))
             idx += 1
+            # Move to the next interval in the scale.
             if idx >= len(intervals):
                 idx = 0
-                octave += 1
+                octave += 1 # Increment the octave after completing one cycle through the scale intervals.
         return notes
 
     def set_scale(self, scale_name=None, root_note=None):
@@ -102,26 +109,28 @@ class LIFNN:
         if chaos is not None:
             self.chaos = float(np.clip(float(chaos), 0.0, 1.0))
         print(f"Knobs => density={self.density:.2f} chaos={self.chaos:.2f}")
-
+    # Build the alternating weights matrix for the network.
     def _build_alternating_weights(self):
         weights = torch.empty((self.num_cells, self.num_cells), dtype=torch.float32)
         for i in range(self.num_cells):
             for j in range(self.num_cells):
                 if i == j:
-                    weights[i, j] = -0.22
+                    weights[i, j] = -0.22 # Self-inhibition for each neuron.
                 elif (i % 2) == (j % 2):
-                    weights[i, j] = 0.28
+                    weights[i, j] = 0.28 # Excitatory connection for neurons with the same parity.
                 else:
-                    weights[i, j] = -0.38
+                    weights[i, j] = -0.38 # Inhibitory connection for neurons with different parity.
         return weights
-
+    # Compute the oscillating drive for the network based on the input value.
     def _oscillating_drive(self, input_value):
+        # Normalize the input value and compute the phase speed for oscillation.
         input_norm = float(torch.tanh(torch.tensor(float(input_value), dtype=torch.float32) / 6.0).item())
         phase_speed = self.base_phase_step * (1.0 + 0.8 * input_norm)
         phase_speed *= 0.75 + 0.55 * self.density
         phase_speed = float(np.clip(phase_speed, 0.08, 0.85))
         self.phase += phase_speed
 
+        # Compute the oscillation amplitude and phase for each neuron.
         amp = 0.12 + (0.25 + 0.25 * self.density) * abs(input_norm)
         phase_vector = torch.full((self.num_cells,), self.phase, dtype=torch.float32)
         parity_phase = torch.tensor(
@@ -129,10 +138,11 @@ class LIFNN:
             dtype=torch.float32,
         )
         oscillation = amp * torch.sin(phase_vector + parity_phase + self.phase_offsets)
-
+        # Compute the base input, topology term, and noise for each neuron.
         base = torch.full((self.num_cells,), input_norm * (0.45 + 0.20 * self.density), dtype=torch.float32)
         topology_term = input_norm * 0.35 * self.neuron_offsets
         noise_std = 0.015 + 0.11 * self.chaos
+        # Generate Gaussian noise for each neuron based on the chaos parameter.
         noise = torch.tensor(self.rng.normal(0.0, noise_std, size=self.num_cells), dtype=torch.float32)
         return base + topology_term + oscillation + noise
 
@@ -155,7 +165,7 @@ class LIFNN:
             if (self.step_index + i) % period < duty:
                 gate[i] = 1.0
         return gate
-
+    
     def _open_midi_output(self):
         get_port_count = getattr(self.midi_out, "getPortCount", None)
         get_port_name = getattr(self.midi_out, "getPortName", None)
@@ -256,38 +266,48 @@ class LIFNN:
         raise RuntimeError(
             f"Unsupported RtMidi output API for message {message}: {last_error}"
         )
-
+    # Send a MIDI message with the specified status, note, and velocity.
     def note_on(self, note):
+        # Trigger a note-on event for the specified note if it is not already active.
         with self.lock:
             if note not in self.active_notes:
                 self._send_midi(0x90, note, 127)
                 self.active_notes.add(note)
 
     def note_off(self, note):
+        # Trigger a note-off event for the specified note if it is currently active.
         with self.lock:
             if note in self.active_notes:
                 self._send_midi(0x80, note, 0)
                 self.active_notes.remove(note)
 
     def all_notes_off(self):
+        # Turn off all currently active notes.
         with self.lock:
             for note in list(self.active_notes):
                 self._send_midi(0x80, note, 0)
                 self.active_notes.remove(note)
 
     def update(self, input_value):
+        # Update the network state based on the input value and internal dynamics.
+        # Normalize the input value and compute the external and recurrent drives.
         input_norm = float(torch.tanh(torch.tensor(float(input_value), dtype=torch.float32) / 6.0).item())
+        # Compute the normalized input and the external oscillating drive.
         external_drive = self._oscillating_drive(input_value)
+        # Compute the recurrent drive based on the recurrent weights and spike trace.
         recurrent_gain = self.recurrent_gain * (0.7 + 0.6 * self.chaos)
         recurrent_drive = recurrent_gain * torch.mv(self.recurrent_weights, self.spike_trace)
+        # Update the modulation phase and compute the slow bias for each neuron.
         self.mod_phase += self.mod_phase_step * (1.0 + 0.35 * abs(input_norm))
         slow_bias = 0.16 * torch.sin(
             torch.full((self.num_cells,), self.mod_phase, dtype=torch.float32) + self.phase_offsets
         )
+        # Compute the rhythmic gate and mix it with the drive.
         gate = self._rhythmic_gate()
         gate_mix = (0.24 + 0.45 * self.density) + (0.76 - 0.45 * self.density) * gate
         tonic = 0.05 + 0.20 * self.density + 0.12 * abs(input_norm)
         gated_drive = (external_drive + recurrent_drive + self.bias + slow_bias + tonic) * gate_mix
+        # Apply the gated drive and implement the rescue mechanism for silent neurons.
         total_drive = gated_drive
         rescue_after = int(round(16 - 10 * self.density))
         if self.silent_steps >= rescue_after:
@@ -297,12 +317,15 @@ class LIFNN:
 
         current_spikes = torch.zeros(self.num_cells, dtype=torch.float32)
         for i, cell in enumerate(self.lif_cells):
+            # Compute the input for the neuron and update its state.
             neuron_input = total_drive[i].unsqueeze(0)
             self.outputs[i], self.states[i] = cell(neuron_input, self.states[i])
             if self.outputs[i] > 0:
+                # Trigger note-on if the neuron spikes.
                 self.note_on(self.notes[i])
                 current_spikes[i] = 1.0
             else:
+                # Trigger note-off if the neuron is silent.
                 self.note_off(self.notes[i])
         self.spike_trace = self.trace_decay * self.spike_trace + current_spikes
         if current_spikes.sum().item() > 0:
