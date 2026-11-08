@@ -52,6 +52,13 @@ On startup, the script prints available MIDI output ports and opens one.
 - `audiofollow on|off [mix]`
 - `scale NAME`
 - `scale NAME ROOT`
+- `beat_tracker_energy_threshold X`
+- `beat_tracker_prev_energy_threshold X`
+- `beat_tracker_flux_threshold X`
+- `beat_tracker_sensitivity X`
+- `meter_inducer_base_phase_step X`
+- `meter_inducer_mod_phase_step X`
+- `meter_inducer_slow_factor X`
 - `scales`
 - `show`
 - `q` / `quit` / `exit`
@@ -68,6 +75,18 @@ flowchart TD
     B --> D[audiofollow mapping]
     D --> E[density, chaos]
     B --> F[BeatTracker]
+    T1[beat_tracker_energy_threshold]
+    T2[beat_tracker_prev_energy_threshold]
+    T3[beat_tracker_flux_threshold]
+    M1[meter_inducer_base_phase_step]
+    M2[meter_inducer_mod_phase_step]
+    M3[meter_inducer_slow_factor]
+    T1 --> F
+    T2 --> F
+    T3 --> F
+    M1 --> F
+    M2 --> F
+    M3 --> F
     F --> G[beat_now]
     H[beatstrength] --> I[beat_level]
     G --> I
@@ -149,6 +168,80 @@ flowchart TD
   - maps audio spectral flux -> chaos target
   - applies smoothing and blend by `mix`
   - with `off`, density/chaos stay manual
+
+### `beat_tracker_energy_threshold`
+
+- Usage: `beat_tracker_energy_threshold X`
+- Sensible values:
+  - `0.35-0.50`: easier beat triggering
+  - `0.50-0.65`: default-ish behavior
+  - `0.65-0.85`: stricter triggering
+- Processing-chain effect:
+  - threshold in BeatTracker for audio energy gate
+  - lower values produce more beat events
+
+### `beat_tracker_prev_energy_threshold`
+
+- Usage: `beat_tracker_prev_energy_threshold X`
+- Sensible values:
+  - `0.35-0.50`: allows beats to retrigger sooner
+  - `0.50-0.65`: balanced retrigger behavior
+  - `0.65-0.85`: fewer retriggers
+- Processing-chain effect:
+  - previous-energy condition for beat edge detection
+  - changes how quickly consecutive beats can fire
+
+### `beat_tracker_flux_threshold`
+
+- Usage: `beat_tracker_flux_threshold X`
+- Sensible values:
+  - `0.15-0.25`: catches more transients
+  - `0.25-0.40`: balanced
+  - `0.40-0.70`: only strong transients
+- Processing-chain effect:
+  - threshold for spectral-flux gate in beat detection
+  - lower values increase sensitivity to timbral changes
+
+### `beat_tracker_sensitivity`
+
+- Usage: `beat_tracker_sensitivity X`
+- Note: this parameter is exposed in CLI but currently not used by beat logic in code.
+- Sensible values:
+  - keep near `1.0` until logic is wired to consume it
+- Processing-chain effect:
+  - currently no direct effect on processing chain (placeholder control)
+
+### `meter_inducer_base_phase_step`
+
+- Usage: `meter_inducer_base_phase_step X`
+- Sensible values:
+  - `0.40-0.55`: slower beat-cycle stepping
+  - `0.55-0.75`: balanced
+  - `0.75-1.10`: faster cycle stepping
+- Processing-chain effect:
+  - controls meter-inducer phase increment per update
+  - influences when BeatTracker allows beat pulses (`is_one`)
+
+### `meter_inducer_mod_phase_step`
+
+- Usage: `meter_inducer_mod_phase_step X`
+- Sensible values:
+  - `0.04-0.07`: gentler modulation
+  - `0.07-0.12`: stronger modulation cadence
+- Processing-chain effect:
+  - changes meter inducer modulation-rate progression
+  - affects rhythmic mask timing in beat admission
+
+### `meter_inducer_slow_factor`
+
+- Usage: `meter_inducer_slow_factor X`
+- Sensible values:
+  - `0.40-0.60`: fewer beat-admission checks
+  - `0.70-0.90`: frequent checks (default-ish around `0.8`)
+  - avoid `>= 1.0` to prevent unstable step interval behavior
+- Processing-chain effect:
+  - sets cadence of meter-inducer gating checks (`step_index % int(1/slow_factor)`)
+  - higher values generally allow beat checks more often
 
 ### `scale`
 
@@ -237,6 +330,21 @@ auto 384
 scale drums
 knobs 0.68 0.40
 beatstrength 1.20
+audiofollow on 0.70
+auto 512
+```
+
+### Scene 3b: Drum jam + tighter beat detector
+
+```text
+scale drums
+knobs 0.66 0.42
+beatstrength 1.10
+beat_tracker_energy_threshold 0.58
+beat_tracker_flux_threshold 0.34
+meter_inducer_base_phase_step 0.62
+meter_inducer_mod_phase_step 0.08
+meter_inducer_slow_factor 0.80
 audiofollow on 0.70
 auto 512
 ```
