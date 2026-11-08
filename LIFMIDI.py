@@ -99,6 +99,8 @@ class LIFNN:
         self.audio_chaos_smoothing = 0.80
         self._open_midi_output()
         self.audio_input = AudioInput()
+        self.beat_tracker = BeatTracker()
+        self.beat_now = False
     
     def _build_scale_notes(self, scale_name, root_note):
         if scale_name == "drums":
@@ -175,6 +177,8 @@ class LIFNN:
         self.chaos = self.audio_chaos_smoothing * self.chaos + (1.0 - self.audio_chaos_smoothing) * blended_chaos
         self.density = float(np.clip(self.density, 0.0, 1.0))
         self.chaos = float(np.clip(self.chaos, 0.0, 1.0))
+        self.beat_now = self.beat_tracker.process(self.audio_input.get_features())
+
     # Build the alternating weights matrix for the network.
     def _build_alternating_weights(self):
         weights = torch.empty((self.num_cells, self.num_cells), dtype=torch.float32)
@@ -377,7 +381,7 @@ class LIFNN:
         # Compute the rhythmic gate and mix it with the drive.
         gate = self._rhythmic_gate()
         gate_mix = (0.24 + 0.45 * self.density) + (0.76 - 0.45 * self.density) * gate
-        tonic = 0.05 + 0.20 * self.density + 0.12 * abs(input_norm)
+        tonic = 0.05 + 0.20 * self.density + 0.12 * abs(input_norm) + (0.3 if self.beat_now else 0.0)
         gated_drive = (external_drive + recurrent_drive + self.bias + slow_bias + tonic) * gate_mix
         # Apply the gated drive and implement the rescue mechanism for silent neurons.
         total_drive = gated_drive
@@ -498,6 +502,19 @@ class AudioInput:
         self.audio_stream.close()
         self.audio_stream = None
         self.available = False
+
+class BeatTracker:
+    def __init__(self):
+        self.prev_energy = 0.0
+
+    def process(self, features):
+        energy = features.get("energy", 0.0)
+        flux = features.get("flux", 0.0)
+        beat = False
+        if energy > 0.5 and flux > 0.3 and self.prev_energy <= 0.5:
+            beat = True
+        self.prev_energy = energy
+        return beat
 
 if __name__ == "__main__":
     print("Tip: set LIFNN_MIDI_PORT to part of the desired output name, e.g. LIFNN_MIDI_PORT=IAC")
