@@ -535,8 +535,11 @@ class MeterInducer:
 class BeatTracker:
     def __init__(self):
         self.prev_energy = 0.0
-        self.meter_inducer = MeterInducer(beat_tracker=self)
+        self.meter_inducer = MeterInducer(base_phase_step=0.6, mod_phase_step=0.08, slow_factor=0.8, beat_tracker=self)
         self.metric = 0.0
+        self.energy_threshold = 0.5
+        self.prev_energy_threshold = 0.5
+        self.flux_threshold = 0.3
         self.midi_out = midi_out
 
     def process(self, features):
@@ -544,7 +547,7 @@ class BeatTracker:
         flux = features.get("flux", 0.0)
         is_one = self.meter_inducer.step()
         beat = False
-        if energy > 0.5 and flux > 0.3 and self.prev_energy <= 0.5 and is_one:
+        if energy > self.energy_threshold and flux > self.flux_threshold and self.prev_energy <= self.prev_energy_threshold and is_one:
             beat = True
         self.prev_energy = energy
         return beat
@@ -564,6 +567,18 @@ if __name__ == "__main__":
             raw_value = input("Enter input or command: ").strip()
             if raw_value.lower() in {"q", "quit", "exit"}:
                 break
+            if raw_value.lower() == "meter_inducer_base_phase_step":
+                lifnn.meter_inducer.base_phase_step = float(input("Enter new base_phase_step: "))
+            if raw_value.lower() == "meter_inducer_mod_phase_step":
+                lifnn.meter_inducer.mod_phase_step = float(input("Enter new mod_phase_step: "))
+            if raw_value.lower() == "meter_inducer_slow_factor":
+                lifnn.meter_inducer.slow_factor = float(input("Enter new slow_factor: "))
+            if raw_value.lower() == "beat_tracker_prev_energy_threshold":
+                lifnn.beat_tracker.prev_energy_threshold = float(input("Enter new prev_energy_threshold: "))
+            if raw_value.lower() == "beat_tracker_energy_threshold":
+                lifnn.beat_tracker.energy_threshold = float(input("Enter new energy_threshold: "))
+            if raw_value.lower() == "beat_tracker_flux_threshold":
+                lifnn.beat_tracker.flux_threshold = float(input("Enter new flux_threshold: "))
             if raw_value.lower() == "scales":
                 print("Available scales:", ", ".join(sorted(SCALES.keys())))
                 continue
