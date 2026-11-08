@@ -552,6 +552,61 @@ class BeatTracker:
         self.prev_energy = energy
         return beat
 
+
+METER_HYPOTHESES = [
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 2, 3, 4, 5, 6, 7, 8],
+    [1, 2, 3, 4, 5, 6, 7],
+    [1, 2, 3, 4, 5, 6],
+    [1, 2, 3, 4, 5],
+    [1, 2, 3, 4],
+    [1, 2, 3],
+    [1, 2],
+    [1]]
+
+
+class MeterAgent:
+    def __init__(self):
+        self.hypotheses = METER_HYPOTHESES
+        self.current_hypothesis = 0
+        self.step_index = 0
+        self.silent_steps = 0
+        self.energy_threshold = 0.5
+        self.prev_energy_threshold = 0.5
+        self.flux_threshold = 0.3
+        self.meter_inducer = MeterInducer(base_phase_step=0.6, mod_phase_step=0.08, slow_factor=0.8, beat_tracker=self)
+        self.prev_energy = 0.0
+        self.flux = 0.0
+        self.beat = False
+
+    def try_hypothesis(self, features):
+        beat = self.process(features)
+        if beat:
+            self.silent_steps = 0
+        else:
+            self.silent_steps += 1
+        if self.silent_steps > 4:
+            self.current_hypothesis = (self.current_hypothesis + 1) % len(self.hypotheses)
+            self.step_index = 0
+            self.silent_steps = 0
+        self.step_index += 1
+        return beat
+
+    def process(self, features):
+        energy = features.get("energy", 0.0)
+        flux = features.get("flux", 0.0)
+        is_one = self.meter_inducer.step()
+        beat = False
+        if energy > self.energy_threshold and flux > self.flux_threshold and self.prev_energy <= self.prev_energy_threshold and is_one:
+            beat = True
+        self.prev_energy = energy
+        self.flux = flux
+        self.beat = beat
+        return beat
+    
 if __name__ == "__main__":
     print("Tip: set LIFNN_MIDI_PORT to part of the desired output name, e.g. LIFNN_MIDI_PORT=IAC")
     lifnn = LIFNN()
