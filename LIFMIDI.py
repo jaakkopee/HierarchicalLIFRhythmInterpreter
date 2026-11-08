@@ -569,7 +569,7 @@ METER_HYPOTHESES = [
 
 
 class MeterAgent:
-    def __init__(self):
+    def __init__(self, beat_tracker):
         self.hypotheses = METER_HYPOTHESES
         self.current_hypothesis = 0
         self.step_index = 0
@@ -577,13 +577,13 @@ class MeterAgent:
         self.energy_threshold = 0.5
         self.prev_energy_threshold = 0.5
         self.flux_threshold = 0.3
-        self.meter_inducer = MeterInducer(base_phase_step=0.6, mod_phase_step=0.08, slow_factor=0.8, beat_tracker=self)
+        self.beat_tracker = beat_tracker
         self.prev_energy = 0.0
         self.flux = 0.0
         self.beat = False
 
     def try_hypothesis(self, features):
-        beat = self.process(features)
+        beat = self.beat_tracker.process(features)
         if beat:
             self.silent_steps = 0
         else:
