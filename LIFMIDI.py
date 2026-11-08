@@ -567,18 +567,6 @@ if __name__ == "__main__":
             raw_value = input("Enter input or command: ").strip()
             if raw_value.lower() in {"q", "quit", "exit"}:
                 break
-            if raw_value.lower() == "meter_inducer_base_phase_step":
-                lifnn.meter_inducer.base_phase_step = float(input("Enter new base_phase_step: "))
-            if raw_value.lower() == "meter_inducer_mod_phase_step":
-                lifnn.meter_inducer.mod_phase_step = float(input("Enter new mod_phase_step: "))
-            if raw_value.lower() == "meter_inducer_slow_factor":
-                lifnn.meter_inducer.slow_factor = float(input("Enter new slow_factor: "))
-            if raw_value.lower() == "beat_tracker_prev_energy_threshold":
-                lifnn.beat_tracker.prev_energy_threshold = float(input("Enter new prev_energy_threshold: "))
-            if raw_value.lower() == "beat_tracker_energy_threshold":
-                lifnn.beat_tracker.energy_threshold = float(input("Enter new energy_threshold: "))
-            if raw_value.lower() == "beat_tracker_flux_threshold":
-                lifnn.beat_tracker.flux_threshold = float(input("Enter new flux_threshold: "))
             if raw_value.lower() == "scales":
                 print("Available scales:", ", ".join(sorted(SCALES.keys())))
                 continue
@@ -587,6 +575,14 @@ if __name__ == "__main__":
                 lifnn.set_beat_strength(lifnn.beat_strength)
                 lifnn.set_scale(lifnn.scale_name, lifnn.root_note)
                 lifnn.set_audio_knob_follow(lifnn.audio_knob_follow, lifnn.audio_knob_mix)
+                print("Beat tracker thresholds:")
+                print("  energy_threshold:", lifnn.beat_tracker.energy_threshold)
+                print("  flux_threshold:", lifnn.beat_tracker.flux_threshold)
+                print("  prev_energy_threshold:", lifnn.beat_tracker.prev_energy_threshold)
+                print("Meter inducer parameters:")
+                print("  base_phase_step:", lifnn.beat_tracker.meter_inducer.base_phase_step)
+                print("  mod_phase_step:", lifnn.beat_tracker.meter_inducer.mod_phase_step)
+                print("  slow_factor:", lifnn.beat_tracker.meter_inducer.slow_factor)
                 continue
             if raw_value == "":
                 lifnn.run_auto()
@@ -646,8 +642,63 @@ if __name__ == "__main__":
                 mix = lifnn.audio_knob_mix if len(parts) == 2 else float(parts[2])
                 lifnn.set_audio_knob_follow(enabled == "on", mix)
                 continue
-            input_value = float(raw_value)
-            lifnn.update(input_value)
+            if raw_value.lower().startswith("beat_tracker_prev_energy_threshold"):
+                parts = raw_value.split()
+                if len(parts) != 2:
+                    print("Usage: beat_tracker_prev_energy_threshold <value>")
+                    continue
+                lifnn.beat_tracker.prev_energy_threshold = float(parts[1])
+                print("beat_tracker_prev_energy_threshold set to", lifnn.beat_tracker.prev_energy_threshold)
+                continue
+            if raw_value.lower().startswith("beat_tracker_energy_threshold"):
+                parts = raw_value.split()
+                if len(parts) != 2:
+                    print("Usage: beat_tracker_energy_threshold <value>")
+                    continue
+                lifnn.beat_tracker.energy_threshold = float(parts[1])
+                print("beat_tracker_energy_threshold set to", lifnn.beat_tracker.energy_threshold)
+                continue
+            if raw_value.lower().startswith("beat_tracker_flux_threshold"):
+                parts = raw_value.split()
+                if len(parts) != 2:
+                    print("Usage: beat_tracker_flux_threshold <value>")
+                    continue
+                lifnn.beat_tracker.flux_threshold = float(parts[1])
+                print("beat_tracker_flux_threshold set to", lifnn.beat_tracker.flux_threshold)
+                continue
+            if raw_value.lower().startswith("beat_tracker_sensitivity"):
+                parts = raw_value.split()
+                if len(parts) != 2:
+                    print("Usage: beat_tracker_sensitivity <value>")
+                    continue
+                lifnn.beat_tracker.sensitivity = float(parts[1])
+                print("beat_tracker_sensitivity set to", lifnn.beat_tracker.sensitivity)
+                continue
+            if raw_value.lower().startswith("meter_inducer_base_phase_step"):
+                parts = raw_value.split()
+                if len(parts) != 2:
+                    print("Usage: meter_inducer_base_phase_step <value>")
+                    continue
+                lifnn.beat_tracker.meter_inducer.base_phase_step = float(parts[1])
+                print("meter_inducer_base_phase_step set to", lifnn.beat_tracker.meter_inducer.base_phase_step)
+                continue
+            if raw_value.lower().startswith("meter_inducer_mod_phase_step"):
+                parts = raw_value.split()
+                if len(parts) != 2:
+                    print("Usage: meter_inducer_mod_phase_step <value>")
+                    continue
+                lifnn.beat_tracker.meter_inducer.mod_phase_step = float(parts[1])
+                print("meter_inducer_mod_phase_step set to", lifnn.beat_tracker.meter_inducer.mod_phase_step)
+                continue
+            if raw_value.lower().startswith("meter_inducer_slow_factor"):
+                parts = raw_value.split()
+                if len(parts) != 2:
+                    print("Usage: meter_inducer_slow_factor <value>")
+                    continue
+                lifnn.beat_tracker.meter_inducer.slow_factor = float(parts[1])
+                print("meter_inducer_slow_factor set to", lifnn.beat_tracker.meter_inducer.slow_factor)
+                continue
+                
     except ValueError:
         print("Invalid number input. Exiting.")
     except KeyboardInterrupt:
