@@ -582,15 +582,11 @@ class MeterAgent:
         self.current_hypothesis = 0
         self.step_index = 0
         self.silent_steps = 0
-        self.energy_threshold = 0.5
-        self.prev_energy_threshold = 0.5
-        self.flux_threshold = 0.3
         self.beat_tracker = beat_tracker
-        self.prev_energy = 0.0
-        self.flux = 0.0
-        self.beat = False
 
     def try_hypothesis(self, features):
+        self.prev_energy = features.get("energy", 0.0)
+        self.flux = features.get("flux", 0.0)
         beat = self.beat_tracker.process(features)
         if beat:
             self.silent_steps = 0
@@ -598,6 +594,7 @@ class MeterAgent:
             self.silent_steps += 1
         if self.silent_steps > 4:
             self.current_hypothesis = (self.current_hypothesis + 1) % len(self.hypotheses)
+            print("Switching to hypothesis", self.current_hypothesis)
             self.step_index = 0
             self.silent_steps = 0
         self.step_index += 1
