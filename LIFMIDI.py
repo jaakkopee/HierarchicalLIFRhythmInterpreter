@@ -101,6 +101,8 @@ class LIFNN:
         self.audio_input = AudioInput()
         self.beat_tracker = BeatTracker()
         self.beat_now = False
+        self.beat_level = 0.0
+        self.beat_strength = 1.0
     
     def _build_scale_notes(self, scale_name, root_note):
         if scale_name == "drums":
@@ -159,11 +161,19 @@ class LIFNN:
             self.audio_knob_mix = float(np.clip(float(mix), 0.0, 1.0))
         print(f"Audio knob follow => {self.audio_knob_follow} mix={self.audio_knob_mix:.2f}")
 
+    def set_beat_strength(self, beat_strength=None):
+        if beat_strength is not None:
+            self.beat_strength = float(np.clip(float(beat_strength), 0.0, 2.0))
+        print(f"Beat strength => {self.beat_strength:.2f}")
+
     def _update_knobs_from_audio(self):
+        features = self.audio_input.get_features()
+        self.beat_now = self.beat_tracker.process(features)
+        self.beat_level = self.beat_strength if self.beat_now else 0.0
+
         if not self.audio_knob_follow:
             return
 
-        features = self.audio_input.get_features()
         energy = features["energy"]
         flux = features["flux"]
 
@@ -177,7 +187,6 @@ class LIFNN:
         self.chaos = self.audio_chaos_smoothing * self.chaos + (1.0 - self.audio_chaos_smoothing) * blended_chaos
         self.density = float(np.clip(self.density, 0.0, 1.0))
         self.chaos = float(np.clip(self.chaos, 0.0, 1.0))
-        self.beat_now = self.beat_tracker.process(self.audio_input.get_features())
 
     # Build the alternating weights matrix for the network.
     def _build_alternating_weights(self):
@@ -381,8 +390,8 @@ class LIFNN:
         # Compute the rhythmic gate and mix it with the drive.
         gate = self._rhythmic_gate()
         gate_mix = (0.24 + 0.45 * self.density) + (0.76 - 0.45 * self.density) * gate
-        tonic = 0.05 + 0.20 * self.density + 0.12 * abs(input_norm) + (0.3 if self.beat_now else 0.0)
-        gated_drive = (external_drive + recurrent_drive + self.bias + slow_bias + tonic) * gate_mix * (1.0 + 0.5 * self.beat_now)
+        tonic = 0.05 + 0.20 * self.density + 0.12 * abs(input_norm) + (0.3 * self.beat_level)
+        gated_drive = (external_drive + recurrent_drive + self.bias + slow_bias + tonic) * gate_mix * (1.0 + 0.5 * self.beat_level)
         # Apply the gated drive and implement the rescue mechanism for silent neurons.
         total_drive = gated_drive
         rescue_after = int(round(16 - 10 * self.density))
@@ -520,10 +529,11 @@ if __name__ == "__main__":
     print("Tip: set LIFNN_MIDI_PORT to part of the desired output name, e.g. LIFNN_MIDI_PORT=IAC")
     lifnn = LIFNN()
     print(
-        "Commands: blank=auto, auto N, density X, chaos X, knobs D C, "
+        "Commands: blank=auto, auto N, density X, chaos X, knobs D C, beatstrength X, "
         "scale NAME [ROOT], scales, audiofollow on|off [mix], show, q"
     )
     lifnn.set_knobs(lifnn.density, lifnn.chaos)
+    lifnn.set_beat_strength(lifnn.beat_strength)
     lifnn.set_scale(lifnn.scale_name, lifnn.root_note)
     try:
         while True:
@@ -535,6 +545,7 @@ if __name__ == "__main__":
                 continue
             if raw_value.lower() == "show":
                 lifnn.set_knobs(lifnn.density, lifnn.chaos)
+                lifnn.set_beat_strength(lifnn.beat_strength)
                 lifnn.set_scale(lifnn.scale_name, lifnn.root_note)
                 lifnn.set_audio_knob_follow(lifnn.audio_knob_follow, lifnn.audio_knob_mix)
                 continue
@@ -568,6 +579,13 @@ if __name__ == "__main__":
                     print("Usage: knobs <density 0..1> <chaos 0..1>")
                     continue
                 lifnn.set_knobs(density=float(parts[1]), chaos=float(parts[2]))
+                continue
+            if raw_value.lower().startswith("beatstrength"):
+                parts = raw_value.split()
+                if len(parts) != 2:
+                    print("Usage: beatstrength 0.0..2.0")
+                    continue
+                lifnn.set_beat_strength(float(parts[1]))
                 continue
             if raw_value.lower().startswith("scale"):
                 parts = raw_value.split()

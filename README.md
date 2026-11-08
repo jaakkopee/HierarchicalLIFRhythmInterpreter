@@ -48,6 +48,7 @@ On startup, the script prints available MIDI output ports and opens one.
 - `density X`: set density knob (`0.0..1.0`)
 - `chaos X`: set chaos knob (`0.0..1.0`)
 - `knobs D C`: set both knobs
+- `beatstrength X`: set beat accent strength (`0.0..2.0`)
 - `audiofollow on|off [mix]`: enable/disable audio-driven chaos+density (`mix` in `0..1`)
 - `scale NAME`: set scale
 - `scale NAME ROOT`: set scale and root MIDI note (`0..127`)
@@ -81,6 +82,7 @@ Built-in scale names:
 - The network has rhythmic gating, slow modulation, and anti-silence recovery to avoid dead states.
 - `density` mainly affects activity level and gate duty.
 - `chaos` mainly affects randomness and pattern variability.
+- `beatstrength` controls how strongly detected beats accent network drive.
 - `audiofollow` maps audio energy to density and spectral flux to chaos.
 
 ## Quick starting presets
