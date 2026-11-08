@@ -522,7 +522,7 @@ class MeterInducer:
         self.mod_phase_step = mod_phase_step
         self.slow_factor = slow_factor
         self.beat_tracker = beat_tracker
-        self.meter_agent = meter_agent
+        self.meter_agent = meter_agent if meter_agent is not None else MeterAgent(beat_tracker)
         self.meter_hypothesis = None
 
     def step(self):
@@ -537,7 +537,7 @@ class MeterInducer:
                 self.meter_agent.silent_steps += 1
         if self.meter_agent is not None:
             self.meter_hypothesis = self.meter_agent.hypotheses[self.meter_agent.current_hypothesis]
-            return self.meter_hypothesis[self.step_index % len(self.meter_hypothesis)]
+            return self.meter_hypothesis[(self.step_index % len(self.meter_hypothesis)) + 1]
         return None
     
 class BeatTracker:
