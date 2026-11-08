@@ -594,18 +594,6 @@ class MeterAgent:
             self.silent_steps = 0
         self.step_index += 1
         return beat
-
-    def process(self, features):
-        energy = features.get("energy", 0.0)
-        flux = features.get("flux", 0.0)
-        is_one = self.meter_inducer.step()
-        beat = False
-        if energy > self.energy_threshold and flux > self.flux_threshold and self.prev_energy <= self.prev_energy_threshold and is_one:
-            beat = True
-        self.prev_energy = energy
-        self.flux = flux
-        self.beat = beat
-        return beat
     
 if __name__ == "__main__":
     print("Tip: set LIFNN_MIDI_PORT to part of the desired output name, e.g. LIFNN_MIDI_PORT=IAC")
