@@ -512,15 +512,39 @@ class AudioInput:
         self.audio_stream = None
         self.available = False
 
+class MeterInducer:
+    def __init__(self, base_phase_step=0.32, mod_phase_step=0.043, slow_factor=0.5, beat_tracker=None):
+        self.phase = 0.0
+        self.mod_phase = 0.0
+        self.step_index = 0
+        self.silent_steps = 0
+        self.base_phase_step = base_phase_step
+        self.mod_phase_step = mod_phase_step
+        self.slow_factor = slow_factor
+        self.beat_tracker = beat_tracker
+
+    def step(self):
+        self.phase += self.base_phase_step
+        self.mod_phase += self.mod_phase_step
+        self.step_index += 1
+        if self.step_index % int(1.0 / self.slow_factor) != 0:
+            self.silent_steps += 1
+            return
+        return int(self.phase) % 2 == 1
+    
 class BeatTracker:
     def __init__(self):
         self.prev_energy = 0.0
+        self.meter_inducer = MeterInducer(beat_tracker=self)
+        self.metric = 0.0
+        self.midi_out = midi_out
 
     def process(self, features):
         energy = features.get("energy", 0.0)
         flux = features.get("flux", 0.0)
+        is_one = self.meter_inducer.step()
         beat = False
-        if energy > 0.5 and flux > 0.3 and self.prev_energy <= 0.5:
+        if energy > 0.5 and flux > 0.3 and self.prev_energy <= 0.5 and is_one:
             beat = True
         self.prev_energy = energy
         return beat
@@ -615,3 +639,4 @@ if __name__ == "__main__":
         pass
     finally:
         lifnn.close()
+
