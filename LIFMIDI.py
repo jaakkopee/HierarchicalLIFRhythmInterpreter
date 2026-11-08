@@ -382,7 +382,7 @@ class LIFNN:
         gate = self._rhythmic_gate()
         gate_mix = (0.24 + 0.45 * self.density) + (0.76 - 0.45 * self.density) * gate
         tonic = 0.05 + 0.20 * self.density + 0.12 * abs(input_norm) + (0.3 if self.beat_now else 0.0)
-        gated_drive = (external_drive + recurrent_drive + self.bias + slow_bias + tonic) * gate_mix
+        gated_drive = (external_drive + recurrent_drive + self.bias + slow_bias + tonic) * gate_mix * (1.0 + 0.5 * self.beat_now)
         # Apply the gated drive and implement the rescue mechanism for silent neurons.
         total_drive = gated_drive
         rescue_after = int(round(16 - 10 * self.density))
