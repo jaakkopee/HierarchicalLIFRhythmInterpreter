@@ -513,7 +513,7 @@ class AudioInput:
         self.available = False
 
 class MeterInducer:
-    def __init__(self, base_phase_step=0.32, mod_phase_step=0.043, slow_factor=0.5, beat_tracker=None):
+    def __init__(self, base_phase_step=0.32, mod_phase_step=0.043, slow_factor=0.5, beat_tracker=None, meter_agent=None):
         self.phase = 0.0
         self.mod_phase = 0.0
         self.step_index = 0
@@ -522,15 +522,23 @@ class MeterInducer:
         self.mod_phase_step = mod_phase_step
         self.slow_factor = slow_factor
         self.beat_tracker = beat_tracker
+        self.meter_agent = meter_agent
+        self.meter_hypothesis = None
 
     def step(self):
+        if self.meter_agent is not None:
+            self.meter_agent.step_index += 1
         self.phase += self.base_phase_step
         self.mod_phase += self.mod_phase_step
         self.step_index += 1
         if self.step_index % int(1.0 / self.slow_factor) != 0:
             self.silent_steps += 1
-            return
-        return int(self.phase) % 2 == 1
+            if self.meter_agent is not None:
+                self.meter_agent.silent_steps += 1
+        if self.meter_agent is not None:
+            self.meter_hypothesis = self.meter_agent.hypotheses[self.meter_agent.current_hypothesis]
+            return self.meter_hypothesis[self.step_index % len(self.meter_hypothesis)]
+        return None
     
 class BeatTracker:
     def __init__(self):
@@ -545,28 +553,28 @@ class BeatTracker:
     def process(self, features):
         energy = features.get("energy", 0.0)
         flux = features.get("flux", 0.0)
-        is_one = self.meter_inducer.step()
+        meter = self.meter_inducer.step()
         beat = False
-        if energy > self.energy_threshold and flux > self.flux_threshold and self.prev_energy <= self.prev_energy_threshold and is_one:
+        if energy > self.energy_threshold and flux > self.flux_threshold and self.prev_energy <= self.prev_energy_threshold and meter == 1:
             beat = True
         self.prev_energy = energy
         return beat
 
 
 METER_HYPOTHESES = [
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-    [1, 2, 3, 4, 5, 6, 7, 8, 9],
-    [1, 2, 3, 4, 5, 6, 7, 8],
-    [1, 2, 3, 4, 5, 6, 7],
-    [1, 2, 3, 4, 5, 6],
-    [1, 2, 3, 4, 5],
-    [1, 2, 3, 4],
-    [1, 2, 3],
-    [1, 2],
-    [1]]
-
+    {1:1, 2:0.3, 3:0.6, 4:0.3, 5:1, 6:0.3, 7:0.6, 8:0.3, 9:0.6, 10:0.3, 11:0.6, 12:0.3},
+    {1:1, 2:0.3, 3:0.6, 4:0.3, 5:1, 6:0.3, 7:0.6, 8:0.3, 9:0.6, 10:0.3, 11:0.6},
+    {1:1, 2:0.3, 3:0.6, 4:0.3, 5:1, 6:0.3, 7:0.6, 8:0.3, 9:0.6, 10:0.3},
+    {1:1, 2:0.3, 3:0.6, 4:0.3, 5:1, 6:0.3, 7:0.6, 8:0.3, 9:0.6},
+    {1:1, 2:0.3, 3:0.6, 4:0.3, 5:1, 6:0.3, 7:0.6, 8:0.3},
+    {1:1, 2:0.3, 3:0.6, 4:0.3, 5:1, 6:0.3, 7:0.6},
+    {1:1, 2:0.3, 3:0.6, 4:0.3, 5:1, 6:0.3},
+    {1:1, 2:0.3, 3:0.6, 4:0.3, 5:1},
+    {1:1, 2:0.3, 3:0.6, 4:0.3},
+    {1:1, 2:0.3, 3:0.6},
+    {1:1, 2:0.3},
+    {1:1}
+]
 
 class MeterAgent:
     def __init__(self, beat_tracker):
