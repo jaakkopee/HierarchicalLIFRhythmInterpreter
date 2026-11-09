@@ -57,6 +57,7 @@ class MIDIInputController:
         self.running = False
         self.thread = None
         self.cc_map = {}
+        self.debug = False
         self._open()
 
     def _available_port_names(self):
@@ -119,6 +120,7 @@ class MIDIInputController:
             self.thread = threading.Thread(target=self._poll, daemon=True)
             self.thread.start()
             print(f"MIDI input opened: {port_names[selected]} (index {selected})")
+            print("Type 'midi_debug on' to print raw incoming MIDI data and confirm whether your controller is sending CCs.")
         except Exception as exc:
             print(f"Failed to open MIDI input port {selected}: {exc}")
             self.midi_in = None
@@ -137,6 +139,10 @@ class MIDIInputController:
         self.cc_map[cc] = normalized
         print(f"CC mapping: CC {cc} -> {normalized}")
 
+    def set_debug(self, enabled=True):
+        self.debug = bool(enabled)
+        print(f"MIDI debug: {'on' if self.debug else 'off'}")
+
     def _decode_message(self, message):
         if message is None:
             return None
@@ -152,6 +158,12 @@ class MIDIInputController:
             data = list(message)
             if len(data) >= 3 and all(isinstance(item, (int, np.integer)) for item in data[:3]):
                 return [int(data[0]), int(data[1]), int(data[2])]
+        if isinstance(message, dict):
+            for key in ("status", "data1", "data2"):
+                if key in message:
+                    continue
+            if "status" in message and "data1" in message and "data2" in message:
+                return [int(message["status"]), int(message["data1"]), int(message["data2"])]
         return None
 
     def _poll(self):
@@ -168,15 +180,28 @@ class MIDIInputController:
                 time.sleep(0.01)
                 continue
 
+            if message is None:
+                time.sleep(0.01)
+                continue
+
             decoded = self._decode_message(message)
             if decoded is None:
+                if self.debug:
+                    try:
+                        print(f"MIDI raw (unparsed): {message!r}")
+                    except Exception:
+                        print("MIDI raw (unparsed): <non-printable message>")
                 time.sleep(0.01)
                 continue
 
             status, data1, data2 = decoded[:3]
+            if self.debug:
+                print(f"MIDI raw: status=0x{status:02X} data1={data1} data2={data2}")
             if (status & 0xF0) == 0xB0:
                 cc = int(data1)
                 value = int(data2)
+                if self.debug:
+                    print(f"MIDI CC candidate: channel={status & 0x0F} cc={cc} value={value}")
                 param_name = self.cc_map.get(cc)
                 if param_name is not None:
                     normalized = value / 127.0
@@ -904,7 +929,8 @@ if __name__ == "__main__":
     print(
         "Commands: blank=auto, auto N, density X, chaos X, knobs D C, beatstrength X, "
         "eventthreshold X, eventweights S B, eventrandomness X, "
-        "cc <parameter> <cc_number>, scale NAME [ROOT], scales, audiofollow on|off [mix], show, q"
+        "cc <parameter> <cc_number>, ccs, midi_debug on|off, scale NAME [ROOT], scales, "
+        "audiofollow on|off [mix], show, q"
     )
     lifnn.set_knobs(lifnn.density, lifnn.chaos)
     lifnn.set_beat_strength(lifnn.beat_strength)
@@ -939,6 +965,33 @@ if __name__ == "__main__":
                 print("CC mappings:")
                 for cc, param_name in sorted(lifnn.midi_in.cc_map.items()):
                     print(f"  CC {cc}: {param_name}")
+                continue
+            if raw_value.lower().startswith("midi_debug"):
+                parts = raw_value.split()
+                if len(parts) == 1:
+                    print(f"MIDI debug is {'on' if lifnn.midi_in.debug else 'off'}")
+                    continue
+                if parts[1].lower() in {"on", "true", "1"}:
+                    lifnn.midi_in.set_debug(True)
+                elif parts[1].lower() in {"off", "false", "0"}:
+                    lifnn.midi_in.set_debug(False)
+                else:
+                    print("Usage: midi_debug on|off")
+                continue
+            if raw_value.lower().startswith("midi_dump"):
+                parts = raw_value.split()
+                if len(parts) == 1:
+                    lifnn.midi_in.set_debug(True)
+                    print("MIDI dump enabled (same as midi_debug on).")
+                    continue
+                if parts[1].lower() in {"on", "true", "1"}:
+                    lifnn.midi_in.set_debug(True)
+                    print("MIDI dump enabled.")
+                elif parts[1].lower() in {"off", "false", "0"}:
+                    lifnn.midi_in.set_debug(False)
+                    print("MIDI dump disabled.")
+                else:
+                    print("Usage: midi_dump on|off")
                 continue
             if raw_value.lower() == "show":
                 lifnn.set_knobs(lifnn.density, lifnn.chaos)

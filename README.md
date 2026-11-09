@@ -40,6 +40,16 @@ Optional: force a MIDI output by name match:
 LIFNN_MIDI_PORT=IAC python3 LIFMIDI.py
 ```
 
+To verify whether a controller is sending MIDI CC data, open the exact input port and enable raw debug logging:
+
+```bash
+python3 LIFMIDI.py --midi-in "MPD218 Port A"
+# then, at the prompt:
+midi_debug on
+```
+
+While `midi_debug` is enabled, the app prints raw incoming MIDI messages such as `status=0xB0 data1=7 data2=42`. If you move a controller knob and see those lines, the controller is sending CC data.
+
 On startup, the script prints available MIDI output ports and opens one.
 
 ## Interactive commands
@@ -55,6 +65,9 @@ On startup, the script prints available MIDI output ports and opens one.
 - `eventrandomness X`
 - `audiofollow on|off [mix]`
 - `cc <parameter> <cc_number>`
+- `ccs`
+- `midi_debug on|off`
+- `midi_dump on|off`
 - `scale NAME`
 - `scale NAME ROOT`
 - `beat_tracker_energy_threshold X`
