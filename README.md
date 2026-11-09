@@ -290,6 +290,7 @@ Built-in scale names:
 - Very large manual inputs are compressed internally (`tanh`) to keep dynamics stable.
 - The network has rhythmic gating, slow modulation, and anti-silence recovery to avoid dead states.
 - Beat detection from audio transients can inject accents into the drive stage.
+- Meter hypotheses are now adaptively switched by the meter agent when beats are not confirmed for several steps.
 
 ## Quick starting presets
 

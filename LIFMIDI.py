@@ -526,15 +526,12 @@ class MeterInducer:
         self.meter_hypothesis = None
 
     def step(self):
-        if self.meter_agent is not None:
-            self.meter_agent.step_index += 1
         self.phase += self.base_phase_step
         self.mod_phase += self.mod_phase_step
         self.step_index += 1
-        if self.step_index % int(1.0 / self.slow_factor) != 0:
+        step_interval = max(1, int(round(1.0 / max(self.slow_factor, 1e-6))))
+        if self.step_index % step_interval != 0:
             self.silent_steps += 1
-            if self.meter_agent is not None:
-                self.meter_agent.silent_steps += 1
         if self.meter_agent is not None:
             self.meter_hypothesis = self.meter_agent.hypotheses[self.meter_agent.current_hypothesis]
             return self.meter_hypothesis[(self.step_index % len(self.meter_hypothesis)) + 1]
@@ -557,6 +554,8 @@ class BeatTracker:
         beat = False
         if energy > self.energy_threshold and flux > self.flux_threshold and self.prev_energy <= self.prev_energy_threshold and meter == 1:
             beat = True
+        if self.meter_inducer.meter_agent is not None:
+            self.meter_inducer.meter_agent.try_hypothesis(features, beat)
         self.prev_energy = energy
         return beat
 
@@ -584,10 +583,9 @@ class MeterAgent:
         self.silent_steps = 0
         self.beat_tracker = beat_tracker
 
-    def try_hypothesis(self, features):
+    def try_hypothesis(self, features, beat):
         self.prev_energy = features.get("energy", 0.0)
         self.flux = features.get("flux", 0.0)
-        beat = self.beat_tracker.process(features)
         if beat:
             self.silent_steps = 0
         else:
@@ -753,4 +751,3 @@ if __name__ == "__main__":
         pass
     finally:
         lifnn.close()
-
