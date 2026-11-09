@@ -31,6 +31,7 @@ pip install torch norse numpy python-rtmidi
 
 ```bash
 python3 LIFMIDI.py
+python3 LIFMIDI.py --midi-in "MPD218 Port A"
 ```
 
 Optional: force a MIDI output by name match:
@@ -53,6 +54,7 @@ On startup, the script prints available MIDI output ports and opens one.
 - `eventweights S B`
 - `eventrandomness X`
 - `audiofollow on|off [mix]`
+- `cc <parameter> <cc_number>`
 - `scale NAME`
 - `scale NAME ROOT`
 - `beat_tracker_energy_threshold X`

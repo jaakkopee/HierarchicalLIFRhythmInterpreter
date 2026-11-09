@@ -1,3 +1,4 @@
+import argparse
 import norse
 import torch
 from norse.torch import LIFCell
@@ -48,9 +49,184 @@ GM_DRUM_NOTES = [
     56,  # Cowbell
 ]
 
+class MIDIInputController:
+    def __init__(self, lifnn, port_name=None):
+        self.lifnn = lifnn
+        self.port_name = None if port_name is None or str(port_name).strip().lower() in {"", "auto"} else str(port_name).strip()
+        self.midi_in = None
+        self.running = False
+        self.thread = None
+        self.cc_map = {}
+        self._open()
+
+    def _available_port_names(self):
+        if self.midi_in is None:
+            return []
+        try:
+            count = int(self.midi_in.getPortCount())
+        except Exception:
+            return []
+        names = []
+        for idx in range(count):
+            try:
+                names.append(str(self.midi_in.getPortName(idx)))
+            except Exception:
+                names.append(f"port {idx}")
+        return names
+
+    def _open(self):
+        try:
+            self.midi_in = rtmidi.RtMidiIn()
+        except Exception as exc:
+            print(f"MIDI input unavailable: {exc}")
+            self.midi_in = None
+            return
+
+        port_names = self._available_port_names()
+        if not port_names:
+            print("No MIDI input ports found; MIDI CC mapping disabled.")
+            self.midi_in = None
+            return
+
+        print("Available MIDI input ports:")
+        for idx, name in enumerate(port_names):
+            print(f"  [{idx}] {name}")
+
+        selected = None
+        preferred = self.port_name or os.environ.get("LIFNN_MIDI_IN")
+        if preferred:
+            preferred_lower = preferred.lower()
+            for idx, name in enumerate(port_names):
+                if preferred_lower in name.lower():
+                    selected = idx
+                    break
+            if selected is None:
+                print(f"Requested MIDI input '{preferred}' not found; using auto selection.")
+
+        if selected is None:
+            for idx, name in enumerate(port_names):
+                lowered = name.lower()
+                if any(token in lowered for token in ("mpd", "launchpad", "controller", "iac", "bus", "virtual", "midi")):
+                    selected = idx
+                    break
+
+        if selected is None:
+            selected = 0
+
+        try:
+            self.midi_in.openPort(selected)
+            self.running = True
+            self.thread = threading.Thread(target=self._poll, daemon=True)
+            self.thread.start()
+            print(f"MIDI input opened: {port_names[selected]} (index {selected})")
+        except Exception as exc:
+            print(f"Failed to open MIDI input port {selected}: {exc}")
+            self.midi_in = None
+            self.running = False
+
+    def set_cc(self, param_name, cc_number):
+        normalized = param_name.strip().lower().replace("-", "_")
+        if normalized not in self.lifnn.midi_param_names:
+            available = ", ".join(sorted(self.lifnn.midi_param_names))
+            print(f"Unknown parameter '{param_name}'. Available: {available}")
+            return
+        cc = int(cc_number)
+        if not 0 <= cc <= 127:
+            print("CC number must be in the range 0..127.")
+            return
+        self.cc_map[cc] = normalized
+        print(f"CC mapping: CC {cc} -> {normalized}")
+
+    def _decode_message(self, message):
+        if message is None:
+            return None
+        if isinstance(message, tuple):
+            if len(message) >= 3 and all(isinstance(item, (int, np.integer)) for item in message[:3]):
+                return [int(message[0]), int(message[1]), int(message[2])]
+            for candidate in message:
+                decoded = self._decode_message(candidate)
+                if decoded is not None:
+                    return decoded
+            return None
+        if isinstance(message, (bytes, bytearray, list)):
+            data = list(message)
+            if len(data) >= 3 and all(isinstance(item, (int, np.integer)) for item in data[:3]):
+                return [int(data[0]), int(data[1]), int(data[2])]
+        return None
+
+    def _poll(self):
+        while self.running and self.midi_in is not None:
+            try:
+                message = self.midi_in.getMessage()
+            except TypeError:
+                try:
+                    message = self.midi_in.getMessage(10)
+                except Exception:
+                    time.sleep(0.01)
+                    continue
+            except Exception:
+                time.sleep(0.01)
+                continue
+
+            decoded = self._decode_message(message)
+            if decoded is None:
+                time.sleep(0.01)
+                continue
+
+            status, data1, data2 = decoded[:3]
+            if (status & 0xF0) == 0xB0:
+                cc = int(data1)
+                value = int(data2)
+                param_name = self.cc_map.get(cc)
+                if param_name is not None:
+                    normalized = value / 127.0
+                    self.lifnn.apply_midi_value(param_name, normalized)
+                    if param_name == "density":
+                        print(f"MIDI CC {cc} -> density = {self.lifnn.density:.3f}")
+                    elif param_name == "chaos":
+                        print(f"MIDI CC {cc} -> chaos = {self.lifnn.chaos:.3f}")
+                    elif param_name == "beatstrength":
+                        print(f"MIDI CC {cc} -> beatstrength = {self.lifnn.beat_strength:.3f}")
+                    elif param_name == "eventthreshold":
+                        print(f"MIDI CC {cc} -> eventthreshold = {self.lifnn.event_threshold:.3f}")
+                    elif param_name == "event_spike_weight":
+                        print(f"MIDI CC {cc} -> event_spike_weight = {self.lifnn.event_spike_weight:.3f}")
+                    elif param_name == "event_beat_weight":
+                        print(f"MIDI CC {cc} -> event_beat_weight = {self.lifnn.event_beat_weight:.3f}")
+                    elif param_name == "eventrandomness":
+                        print(f"MIDI CC {cc} -> eventrandomness = {self.lifnn.event_randomness:.3f}")
+                    elif param_name == "audio_knob_mix":
+                        print(f"MIDI CC {cc} -> audio_knob_mix = {self.lifnn.audio_knob_mix:.3f}")
+                    elif param_name == "root_note":
+                        print(f"MIDI CC {cc} -> root_note = {self.lifnn.root_note}")
+                    else:
+                        print(f"MIDI CC {cc} -> {param_name} = {normalized:.3f}")
+            time.sleep(0.01)
+
 # a LIF neural network with MIDI output.
 class LIFNN:
-    def __init__(self, num_cells=16):
+    def __init__(self, num_cells=16, midi_in_port=None):
+        self.midi_param_names = {
+            "density",
+            "chaos",
+            "beatstrength",
+            "eventthreshold",
+            "event_spike_weight",
+            "event_beat_weight",
+            "eventrandomness",
+            "audio_knob_mix",
+            "root_note",
+            "beat_tracker_energy_threshold",
+            "beat_tracker_prev_energy_threshold",
+            "beat_tracker_flux_threshold",
+            "beat_tracker_meter_weight",
+            "beat_tracker_energy_weight",
+            "beat_tracker_flux_weight",
+            "beat_tracker_trigger_threshold",
+            "meter_inducer_base_phase_step",
+            "meter_inducer_mod_phase_step",
+            "meter_inducer_slow_factor",
+        }
         # Initialize the LIF neural network with the specified number of cells.
         self.lif_cells = [LIFCell() for _ in range(num_cells)]
         # Initialize the states and outputs for each LIF cell.
@@ -68,6 +244,7 @@ class LIFNN:
         self.drum_channel = 9
         self.midi_channel = self.melodic_channel
         self.midi_out = midi_out
+        self.midi_in = MIDIInputController(self, port_name=midi_in_port)
         self.active_notes = set()
         # Initialize the spike trace, recurrent weights, and other network parameters.
         self.spike_trace = torch.zeros(self.num_cells, dtype=torch.float32)
@@ -188,6 +365,49 @@ class LIFNN:
             f"beat_weight={self.event_beat_weight:.2f} "
             f"randomness={self.event_randomness:.2f}"
         )
+
+    def apply_midi_value(self, param_name, value):
+        name = param_name.strip().lower().replace("-", "_")
+        if name == "density":
+            self.set_knobs(density=float(np.clip(value, 0.0, 1.0)))
+        elif name == "chaos":
+            self.set_knobs(chaos=float(np.clip(value, 0.0, 1.0)))
+        elif name == "beatstrength":
+            self.set_beat_strength(float(np.clip(value * 2.0, 0.0, 2.0)))
+        elif name == "eventthreshold":
+            self.set_event_decision(threshold=float(np.clip(value, 0.0, 1.0)))
+        elif name == "event_spike_weight":
+            self.set_event_decision(spike_weight=float(np.clip(value, 0.0, 1.0)))
+        elif name == "event_beat_weight":
+            self.set_event_decision(beat_weight=float(np.clip(value, 0.0, 1.0)))
+        elif name == "eventrandomness":
+            self.set_event_decision(randomness=float(np.clip(value, 0.0, 1.0)))
+        elif name == "audio_knob_mix":
+            self.set_audio_knob_follow(self.audio_knob_follow, float(np.clip(value, 0.0, 1.0)))
+        elif name == "root_note":
+            self.set_scale(scale_name=self.scale_name, root_note=int(np.clip(round(value * 127.0), 0, 127)))
+        elif name == "beat_tracker_energy_threshold":
+            self.beat_tracker.energy_threshold = float(np.clip(value, 0.0, 1.0))
+        elif name == "beat_tracker_prev_energy_threshold":
+            self.beat_tracker.prev_energy_threshold = float(np.clip(value, 0.0, 1.0))
+        elif name == "beat_tracker_flux_threshold":
+            self.beat_tracker.flux_threshold = float(np.clip(value, 0.0, 1.0))
+        elif name == "beat_tracker_meter_weight":
+            self.beat_tracker.meter_weight = float(np.clip(value, 0.0, 1.0))
+        elif name == "beat_tracker_energy_weight":
+            self.beat_tracker.energy_weight = float(np.clip(value, 0.0, 1.0))
+        elif name == "beat_tracker_flux_weight":
+            self.beat_tracker.flux_weight = float(np.clip(value, 0.0, 1.0))
+        elif name == "beat_tracker_trigger_threshold":
+            self.beat_tracker.beat_trigger_threshold = float(np.clip(value, 0.0, 1.0))
+        elif name == "meter_inducer_base_phase_step":
+            self.beat_tracker.meter_inducer.base_phase_step = float(np.clip(value, 0.0, 1.0))
+        elif name == "meter_inducer_mod_phase_step":
+            self.beat_tracker.meter_inducer.mod_phase_step = float(np.clip(value, 0.0, 1.0))
+        elif name == "meter_inducer_slow_factor":
+            self.beat_tracker.meter_inducer.slow_factor = float(np.clip(value, 0.0, 2.0))
+        else:
+            raise ValueError(f"Unsupported MIDI parameter '{param_name}'")
 
     def _update_knobs_from_audio(self):
         features = self.audio_input.get_features()
@@ -675,12 +895,16 @@ class MeterAgent:
         return beat
     
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Hierarchical LIF rhythm MIDI generator")
+    parser.add_argument("--midi-in", dest="midi_in", default=None, help="MIDI input port name to listen on, e.g. 'MPD218 Port A' or 'IAC Driver Bus 1'")
+    args = parser.parse_args()
     print("Tip: set LIFNN_MIDI_PORT to part of the desired output name, e.g. LIFNN_MIDI_PORT=IAC")
-    lifnn = LIFNN()
+    print(f"MIDI input selection: {args.midi_in if args.midi_in else 'auto'}")
+    lifnn = LIFNN(midi_in_port=args.midi_in)
     print(
         "Commands: blank=auto, auto N, density X, chaos X, knobs D C, beatstrength X, "
         "eventthreshold X, eventweights S B, eventrandomness X, "
-        "scale NAME [ROOT], scales, audiofollow on|off [mix], show, q"
+        "cc <parameter> <cc_number>, scale NAME [ROOT], scales, audiofollow on|off [mix], show, q"
     )
     lifnn.set_knobs(lifnn.density, lifnn.chaos)
     lifnn.set_beat_strength(lifnn.beat_strength)
@@ -698,6 +922,23 @@ if __name__ == "__main__":
                 break
             if raw_value.lower() == "scales":
                 print("Available scales:", ", ".join(sorted(SCALES.keys())))
+                continue
+            if raw_value.lower().startswith("cc"):
+                parts = raw_value.split()
+                if len(parts) != 3:
+                    print("Usage: cc <parameter_name> <cc_number>")
+                    print("Examples: cc density 7, cc chaos 10, cc beatstrength 20")
+                    print("Available parameters:", ", ".join(sorted(lifnn.midi_param_names)))
+                    continue
+                lifnn.midi_in.set_cc(parts[1], parts[2])
+                continue
+            if raw_value.lower() == "ccs":
+                if not lifnn.midi_in.cc_map:
+                    print("No CC mappings configured.")
+                    continue
+                print("CC mappings:")
+                for cc, param_name in sorted(lifnn.midi_in.cc_map.items()):
+                    print(f"  CC {cc}: {param_name}")
                 continue
             if raw_value.lower() == "show":
                 lifnn.set_knobs(lifnn.density, lifnn.chaos)
