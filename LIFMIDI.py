@@ -102,7 +102,13 @@ class LIFNN:
         self.beat_tracker = BeatTracker()
         self.beat_now = False
         self.beat_level = 0.0
+        self.beat_score = 0.0
+        self.meter_strength = 0.0
         self.beat_strength = 1.0
+        self.event_threshold = 0.58
+        self.event_spike_weight = 0.65
+        self.event_beat_weight = 0.35
+        self.event_randomness = 0.10
     
     def _build_scale_notes(self, scale_name, root_note):
         if scale_name == "drums":
@@ -166,10 +172,30 @@ class LIFNN:
             self.beat_strength = float(np.clip(float(beat_strength), 0.0, 2.0))
         print(f"Beat strength => {self.beat_strength:.2f}")
 
+    def set_event_decision(self, threshold=None, spike_weight=None, beat_weight=None, randomness=None):
+        if threshold is not None:
+            self.event_threshold = float(np.clip(float(threshold), 0.0, 1.0))
+        if spike_weight is not None:
+            self.event_spike_weight = float(np.clip(float(spike_weight), 0.0, 1.0))
+        if beat_weight is not None:
+            self.event_beat_weight = float(np.clip(float(beat_weight), 0.0, 1.0))
+        if randomness is not None:
+            self.event_randomness = float(np.clip(float(randomness), 0.0, 1.0))
+        print(
+            "Event decision => "
+            f"threshold={self.event_threshold:.2f} "
+            f"spike_weight={self.event_spike_weight:.2f} "
+            f"beat_weight={self.event_beat_weight:.2f} "
+            f"randomness={self.event_randomness:.2f}"
+        )
+
     def _update_knobs_from_audio(self):
         features = self.audio_input.get_features()
-        self.beat_now = self.beat_tracker.process(features)
-        self.beat_level = self.beat_strength if self.beat_now else 0.0
+        beat_info = self.beat_tracker.process(features)
+        self.beat_now = beat_info["beat"]
+        self.beat_score = beat_info["beat_score"]
+        self.meter_strength = beat_info["meter_strength"]
+        self.beat_level = float(np.clip(self.beat_score * self.beat_strength, 0.0, 2.0))
 
         if not self.audio_knob_follow:
             return
@@ -405,7 +431,17 @@ class LIFNN:
             # Compute the input for the neuron and update its state.
             neuron_input = total_drive[i].unsqueeze(0)
             self.outputs[i], self.states[i] = cell(neuron_input, self.states[i])
-            if self.outputs[i] > 0:
+            spike_score = float(np.clip(self.outputs[i].item(), 0.0, 1.0))
+            beat_component = float(np.clip(self.beat_level, 0.0, 1.0))
+            score_weight_sum = max(1e-6, self.event_spike_weight + self.event_beat_weight)
+            event_score = (
+                self.event_spike_weight * spike_score
+                + self.event_beat_weight * beat_component
+            ) / score_weight_sum
+            stochastic_term = self.event_randomness * self.rng.random()
+            should_trigger = (event_score + stochastic_term) >= self.event_threshold
+
+            if should_trigger:
                 # Trigger note-on if the neuron spikes.
                 self.note_on(self.notes[i])
                 current_spikes[i] = 1.0
@@ -545,19 +581,37 @@ class BeatTracker:
         self.energy_threshold = 0.5
         self.prev_energy_threshold = 0.5
         self.flux_threshold = 0.3
+        self.meter_weight = 0.50
+        self.energy_weight = 0.30
+        self.flux_weight = 0.20
+        self.beat_trigger_threshold = 0.55
         self.midi_out = midi_out
 
     def process(self, features):
         energy = features.get("energy", 0.0)
         flux = features.get("flux", 0.0)
-        meter = self.meter_inducer.step()
-        beat = False
-        if energy > self.energy_threshold and flux > self.flux_threshold and self.prev_energy <= self.prev_energy_threshold and meter == 1:
-            beat = True
+        meter_strength = float(self.meter_inducer.step() or 0.0)
+
+        energy_score = float(np.clip(energy / max(self.energy_threshold, 1e-6), 0.0, 1.0))
+        flux_score = float(np.clip(flux / max(self.flux_threshold, 1e-6), 0.0, 1.0))
+        weight_sum = max(1e-6, self.meter_weight + self.energy_weight + self.flux_weight)
+        beat_score = (
+            self.meter_weight * meter_strength
+            + self.energy_weight * energy_score
+            + self.flux_weight * flux_score
+        ) / weight_sum
+        beat = beat_score >= self.beat_trigger_threshold and self.prev_energy <= self.prev_energy_threshold
+        self.metric = beat_score
         if self.meter_inducer.meter_agent is not None:
-            self.meter_inducer.meter_agent.try_hypothesis(features, beat)
+            self.meter_inducer.meter_agent.try_hypothesis(features, beat, beat_score, meter_strength)
         self.prev_energy = energy
-        return beat
+        return {
+            "beat": beat,
+            "beat_score": beat_score,
+            "meter_strength": meter_strength,
+            "energy_score": energy_score,
+            "flux_score": flux_score,
+        }
 
 
 METER_HYPOTHESES = [
@@ -588,16 +642,18 @@ class MeterAgent:
         self.min_confidence_to_hold = 0.22
         self.beat_tracker = beat_tracker
 
-    def try_hypothesis(self, features, beat):
+    def try_hypothesis(self, features, beat, beat_score, meter_strength):
         self.prev_energy = features.get("energy", 0.0)
         self.flux = features.get("flux", 0.0)
         self.steps_since_switch += 1
         if beat:
             self.silent_steps = 0
-            self.confidence = min(1.0, self.confidence + 0.08)
+            confidence_gain = 0.04 + 0.06 * float(np.clip(beat_score, 0.0, 1.0))
+            self.confidence = min(1.0, self.confidence + confidence_gain)
         else:
             self.silent_steps += 1
-            self.confidence = max(0.0, self.confidence - 0.03)
+            confidence_drop = 0.015 + 0.03 * (1.0 - float(np.clip(meter_strength, 0.0, 1.0)))
+            self.confidence = max(0.0, self.confidence - confidence_drop)
 
         should_switch = (
             self.steps_since_switch >= self.min_hold_steps
@@ -623,10 +679,17 @@ if __name__ == "__main__":
     lifnn = LIFNN()
     print(
         "Commands: blank=auto, auto N, density X, chaos X, knobs D C, beatstrength X, "
+        "eventthreshold X, eventweights S B, eventrandomness X, "
         "scale NAME [ROOT], scales, audiofollow on|off [mix], show, q"
     )
     lifnn.set_knobs(lifnn.density, lifnn.chaos)
     lifnn.set_beat_strength(lifnn.beat_strength)
+    lifnn.set_event_decision(
+        threshold=lifnn.event_threshold,
+        spike_weight=lifnn.event_spike_weight,
+        beat_weight=lifnn.event_beat_weight,
+        randomness=lifnn.event_randomness,
+    )
     lifnn.set_scale(lifnn.scale_name, lifnn.root_note)
     try:
         while True:
@@ -639,12 +702,23 @@ if __name__ == "__main__":
             if raw_value.lower() == "show":
                 lifnn.set_knobs(lifnn.density, lifnn.chaos)
                 lifnn.set_beat_strength(lifnn.beat_strength)
+                lifnn.set_event_decision(
+                    threshold=lifnn.event_threshold,
+                    spike_weight=lifnn.event_spike_weight,
+                    beat_weight=lifnn.event_beat_weight,
+                    randomness=lifnn.event_randomness,
+                )
                 lifnn.set_scale(lifnn.scale_name, lifnn.root_note)
                 lifnn.set_audio_knob_follow(lifnn.audio_knob_follow, lifnn.audio_knob_mix)
                 print("Beat tracker thresholds:")
                 print("  energy_threshold:", lifnn.beat_tracker.energy_threshold)
                 print("  flux_threshold:", lifnn.beat_tracker.flux_threshold)
                 print("  prev_energy_threshold:", lifnn.beat_tracker.prev_energy_threshold)
+                print("Beat tracker scoring:")
+                print("  meter_weight:", lifnn.beat_tracker.meter_weight)
+                print("  energy_weight:", lifnn.beat_tracker.energy_weight)
+                print("  flux_weight:", lifnn.beat_tracker.flux_weight)
+                print("  beat_trigger_threshold:", lifnn.beat_tracker.beat_trigger_threshold)
                 print("Meter inducer parameters:")
                 print("  base_phase_step:", lifnn.beat_tracker.meter_inducer.base_phase_step)
                 print("  mod_phase_step:", lifnn.beat_tracker.meter_inducer.mod_phase_step)
@@ -687,6 +761,27 @@ if __name__ == "__main__":
                     print("Usage: beatstrength 0.0..2.0")
                     continue
                 lifnn.set_beat_strength(float(parts[1]))
+                continue
+            if raw_value.lower().startswith("eventthreshold"):
+                parts = raw_value.split()
+                if len(parts) != 2:
+                    print("Usage: eventthreshold 0.0..1.0")
+                    continue
+                lifnn.set_event_decision(threshold=float(parts[1]))
+                continue
+            if raw_value.lower().startswith("eventweights"):
+                parts = raw_value.split()
+                if len(parts) != 3:
+                    print("Usage: eventweights <spike_weight 0..1> <beat_weight 0..1>")
+                    continue
+                lifnn.set_event_decision(spike_weight=float(parts[1]), beat_weight=float(parts[2]))
+                continue
+            if raw_value.lower().startswith("eventrandomness"):
+                parts = raw_value.split()
+                if len(parts) != 2:
+                    print("Usage: eventrandomness 0.0..1.0")
+                    continue
+                lifnn.set_event_decision(randomness=float(parts[1]))
                 continue
             if raw_value.lower().startswith("scale"):
                 parts = raw_value.split()
@@ -739,6 +834,38 @@ if __name__ == "__main__":
                     continue
                 lifnn.beat_tracker.sensitivity = float(parts[1])
                 print("beat_tracker_sensitivity set to", lifnn.beat_tracker.sensitivity)
+                continue
+            if raw_value.lower().startswith("beat_tracker_meter_weight"):
+                parts = raw_value.split()
+                if len(parts) != 2:
+                    print("Usage: beat_tracker_meter_weight 0.0..1.0")
+                    continue
+                lifnn.beat_tracker.meter_weight = float(np.clip(float(parts[1]), 0.0, 1.0))
+                print("beat_tracker_meter_weight set to", lifnn.beat_tracker.meter_weight)
+                continue
+            if raw_value.lower().startswith("beat_tracker_energy_weight"):
+                parts = raw_value.split()
+                if len(parts) != 2:
+                    print("Usage: beat_tracker_energy_weight 0.0..1.0")
+                    continue
+                lifnn.beat_tracker.energy_weight = float(np.clip(float(parts[1]), 0.0, 1.0))
+                print("beat_tracker_energy_weight set to", lifnn.beat_tracker.energy_weight)
+                continue
+            if raw_value.lower().startswith("beat_tracker_flux_weight"):
+                parts = raw_value.split()
+                if len(parts) != 2:
+                    print("Usage: beat_tracker_flux_weight 0.0..1.0")
+                    continue
+                lifnn.beat_tracker.flux_weight = float(np.clip(float(parts[1]), 0.0, 1.0))
+                print("beat_tracker_flux_weight set to", lifnn.beat_tracker.flux_weight)
+                continue
+            if raw_value.lower().startswith("beat_tracker_trigger_threshold"):
+                parts = raw_value.split()
+                if len(parts) != 2:
+                    print("Usage: beat_tracker_trigger_threshold 0.0..1.0")
+                    continue
+                lifnn.beat_tracker.beat_trigger_threshold = float(np.clip(float(parts[1]), 0.0, 1.0))
+                print("beat_tracker_trigger_threshold set to", lifnn.beat_tracker.beat_trigger_threshold)
                 continue
             if raw_value.lower().startswith("meter_inducer_base_phase_step"):
                 parts = raw_value.split()

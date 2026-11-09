@@ -49,6 +49,9 @@ On startup, the script prints available MIDI output ports and opens one.
 - `chaos X`
 - `knobs D C`
 - `beatstrength X`
+- `eventthreshold X`
+- `eventweights S B`
+- `eventrandomness X`
 - `audiofollow on|off [mix]`
 - `scale NAME`
 - `scale NAME ROOT`
@@ -56,6 +59,10 @@ On startup, the script prints available MIDI output ports and opens one.
 - `beat_tracker_prev_energy_threshold X`
 - `beat_tracker_flux_threshold X`
 - `beat_tracker_sensitivity X`
+- `beat_tracker_meter_weight X`
+- `beat_tracker_energy_weight X`
+- `beat_tracker_flux_weight X`
+- `beat_tracker_trigger_threshold X`
 - `meter_inducer_base_phase_step X`
 - `meter_inducer_mod_phase_step X`
 - `meter_inducer_slow_factor X`
@@ -88,18 +95,21 @@ flowchart TD
     M2 --> F
     M3 --> F
     F --> G[beat_now]
+    F --> GS[beat_score]
     H[beatstrength] --> I[beat_level]
     G --> I
     E --> J[Drive shaping<br/>phase speed, amp, noise, gate]
     C --> J
     E --> K[Recurrent gain]
     I --> L[Beat accent to tonic/gain]
+    GS --> EV[Event score<br/>spike+beat weighting]
     J --> N[Total neuron drive]
     K --> N
     L --> N
     N --> O[LIF neurons]
     O --> P[Spikes]
-    P --> Q[Scale note mapping]
+    P --> EV
+    EV --> Q[Scale note mapping]
     Q --> R[MIDI note on/off]
 ```
 
@@ -154,6 +164,42 @@ flowchart TD
   - scales `beat_level` from beat detections
   - adds accent to tonic drive and global drive multiplier on beat hits
   - stronger values produce more spike bursts near detected transients
+
+### `eventthreshold`
+
+- Usage: `eventthreshold X`
+- Range: `0.0..1.0`
+- Sensible values:
+  - `0.45-0.55`: dense triggering
+  - `0.55-0.70`: balanced (recommended)
+  - `0.70-0.85`: sparse/selective
+- Processing-chain effect:
+  - threshold applied to `(event_score + stochastic_term)` before note trigger
+  - higher values require stronger spike/beat evidence
+
+### `eventweights`
+
+- Usage: `eventweights S B`
+- Range: each weight `0.0..1.0`
+- Sensible values:
+  - spike-led: `eventweights 0.75 0.25`
+  - balanced: `eventweights 0.65 0.35`
+  - beat-led: `eventweights 0.45 0.55`
+- Processing-chain effect:
+  - mixes neuron spike amplitude (`spike_score`) and beat influence (`beat_level`) into `event_score`
+  - controls whether MIDI triggering follows neuron state or beat structure more strongly
+
+### `eventrandomness`
+
+- Usage: `eventrandomness X`
+- Range: `0.0..1.0`
+- Sensible values:
+  - `0.00-0.10`: tight deterministic
+  - `0.10-0.30`: musical humanization
+  - `0.30-0.60`: glitch/probabilistic texture
+- Processing-chain effect:
+  - adds stochastic term to event decision
+  - increases probabilistic variation around threshold boundary
 
 ### `audiofollow`
 
@@ -210,6 +256,43 @@ flowchart TD
   - keep near `1.0` until logic is wired to consume it
 - Processing-chain effect:
   - currently no direct effect on processing chain (placeholder control)
+
+### `beat_tracker_meter_weight`
+
+- Usage: `beat_tracker_meter_weight X`
+- Range: `0.0..1.0`
+- Sensible values:
+  - `0.35-0.55` for balanced meter influence
+- Processing-chain effect:
+  - weight for hypothesis meter strength in beat-score fusion
+
+### `beat_tracker_energy_weight`
+
+- Usage: `beat_tracker_energy_weight X`
+- Range: `0.0..1.0`
+- Sensible values:
+  - `0.20-0.40`
+- Processing-chain effect:
+  - weight for audio energy score in beat-score fusion
+
+### `beat_tracker_flux_weight`
+
+- Usage: `beat_tracker_flux_weight X`
+- Range: `0.0..1.0`
+- Sensible values:
+  - `0.15-0.35`
+- Processing-chain effect:
+  - weight for spectral flux score in beat-score fusion
+
+### `beat_tracker_trigger_threshold`
+
+- Usage: `beat_tracker_trigger_threshold X`
+- Range: `0.0..1.0`
+- Sensible values:
+  - `0.45-0.60` usually musical
+- Processing-chain effect:
+  - threshold for converting beat score to boolean beat event
+  - lower values create more beat events; higher values make beats stricter
 
 ### `meter_inducer_base_phase_step`
 
@@ -321,6 +404,9 @@ auto 256
 scale dorian 38
 knobs 0.60 0.45
 beatstrength 1.00
+eventthreshold 0.58
+eventweights 0.65 0.35
+eventrandomness 0.10
 audiofollow on 0.60
 auto 384
 ```
@@ -331,6 +417,9 @@ auto 384
 scale drums
 knobs 0.68 0.40
 beatstrength 1.20
+eventthreshold 0.56
+eventweights 0.60 0.40
+eventrandomness 0.16
 audiofollow on 0.70
 auto 512
 ```
@@ -341,8 +430,15 @@ auto 512
 scale drums
 knobs 0.66 0.42
 beatstrength 1.10
+eventthreshold 0.57
+eventweights 0.58 0.42
+eventrandomness 0.14
 beat_tracker_energy_threshold 0.58
 beat_tracker_flux_threshold 0.34
+beat_tracker_meter_weight 0.50
+beat_tracker_energy_weight 0.30
+beat_tracker_flux_weight 0.20
+beat_tracker_trigger_threshold 0.55
 meter_inducer_base_phase_step 0.62
 meter_inducer_mod_phase_step 0.08
 meter_inducer_slow_factor 0.80
