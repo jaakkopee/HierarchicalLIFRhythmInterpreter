@@ -44,6 +44,13 @@ POLYRHYTHM_MATRIX = [
     {"meter" : "1/1", 1: {"length": 16, "weight": 1}}
 ]
 
+class PolyRhythm:
+    def __init__(self, polyrhythmic_cells, tempo=60):
+        self.polyrhythmic_cells = polyrhythmic_cells # this holds one or more meters in the poly-rhythm structure
+        self.tempo = tempo
+        self.base_subdivision = 16 #base subdivision for the poly-rhythm cells
+        self.dt = 60 / (self.tempo * self.base_subdivision) #time step for the poly-rhythm cells
+
 class LIFCellPolyRhythmWrapper:
     #each LIF cell is wrapped with a poly-rhythm wrapper to allow tuning according to poly-rhythm parameters
     def __init__(self, lif_cell, poly_rhythm_params):
@@ -52,10 +59,8 @@ class LIFCellPolyRhythmWrapper:
 
     def tune(self, params):
         self.poly_rhythm_params = params
-        # tuning is supposed to make the cell respond according to the poly-rhythm parameters
-        # Here you would implement the logic to adjust the LIF cell's behavior based on the poly-rhythm parameters
-        # For example, you might modify the cell's time constants, thresholds, or other properties
-        pass
+        # Apply the poly-rhythm parameters to tune the LIF cell's behavior
+        tempo = self.poly_rhythm_params.get("tempo", None) #tempo for the poly-rhythm tuning will be derived from audio input or controller data eventually
 
 class RhythmicStructure:
     def __init__(self, cell_amount=136):
@@ -63,7 +68,7 @@ class RhythmicStructure:
         self.current_pattern = None
         self.spike = False
         self.lif_cells = torch.nn.ModuleList([LIFCell() for _ in range(cell_amount)])
-        self.tuning_parameters = [POLYRHYTHM_MATRIX[i % len(POLYRHYTHM_MATRIX)] for i in range(cell_amount)]
+        self.tuning_parameters = [{"polyrhythmic_cells": str(i) + "_" + str(POLYRHYTHM_MATRIX[i % len(POLYRHYTHM_MATRIX)]), "tempo": 60} for i in range(cell_amount)]
         self._tune_cells(self.tuning_parameters)
 
     def _tune_cells(self, tuning_parameters=None):
