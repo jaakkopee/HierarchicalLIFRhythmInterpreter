@@ -58,7 +58,7 @@ class LIFCellPolyRhythmWrapper:
         pass
 
 class RhythmicStructure:
-    def __init__(self, cell_amount=136): # default to 136 cells to match the maximum number of rhythmic structures in POLYRHYTHM_MATRIX
+    def __init__(self, cell_amount=16): # default to 16 cells, one for each polyrhythm (from POLYRHYTHM_MATRIX) in a measure
         self.cell_amount = cell_amount
         self.current_pattern = None
         self.spike = False
