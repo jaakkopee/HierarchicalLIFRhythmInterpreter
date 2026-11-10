@@ -51,24 +51,48 @@ POLYRHYTHM_MATRIX = [
 ]
 
 class PolyRhythm:
-    def __init__(self, meters, tempo=60):
+    def __init__(self, meters):
         self.meters = meters # this holds one or more meters in the poly-rhythm structure
-        self.tempo = tempo
         self.base_subdivision = 16 #base subdivision for the poly-rhythm cells
-        self.dt = 60 / (self.tempo * self.base_subdivision) #time step for the poly-rhythm cells
+        self.dt = None #time step for the poly-rhythm cells, to be set once tempo is known
+        self.seconds_per_beat = None
+        self.base_unit_seconds = None
+        self.target_period_seconds = None
+        self.weight = None
+
+        self.lif_cells = [] # list to hold LIFCellMeterWrapper instances
+
+    def add_lif_cell(self, lif_cell_wrapper):
+        self.lif_cells.append(lif_cell_wrapper)
+        lif_cell_wrapper.poly_rhythm = self
+        return lif_cell_wrapper
+
+    def set_tempo(self, tempo):
+        self.dt = 60 / (tempo * self.base_subdivision)
         self.seconds_per_beat = 60 / tempo
         self.base_unit_seconds = self.seconds_per_beat * self.base_subdivision
-        self.target_period_seconds = self.base_unit_seconds * self.meter_params.get("length", 1)
-        self.weight = self.meter_params.get("weight", 1)
+        for lif_cell_wrapper in self.lif_cells:
+            lif_cell_wrapper.dt = self.dt
+            lif_cell_wrapper.target_period_seconds = lif_cell_wrapper.meter_params.get("length", 1) * self.dt
+            lif_cell_wrapper.weight = lif_cell_wrapper.meter_params.get("weight", 1)
+            lif_cell_wrapper.poly_rhythm = self
 
 class LIFCellMeterWrapper:
-    # Wrapper class for an LIF cell that allows it to be tuned according to meter parameters
-    def __init__(self, meter_params):
-        self.meter_params = meter_params
-        self.tempo = self.meter_params.get("tempo", None)
+    # Wrapper class for LIF cells of one particular meter in the poly-rhythm structure
+    def __init__(self, lif_cells):
+        self.lif_cells = lif_cells
+        self.tempo = None
+        self._induce_tempo_from_audio(None)
+        self.dt = 60 / (self.tempo * 16) if self.tempo else None
 
+    def _induce_tempo_from_audio(self, audio_input):
+        if self.tempo is None:
+            # Here you would implement logic to induce tempo from the audio input
+            # For now, we just set a default tempo
+            self.tempo = 60
+    
     def create_lif_cells_and_tune(self, params):
-        self.state = self.lif_cell.initial_state()
+        self.states = [cell.initial_state(torch.zeros(1)) for cell in self.lif_cells] 
         self.meter_params = params
         self.dt = 60 / (self.tempo * 16) if self.tempo else None
         self.target_period_seconds = self.meter_params.get("length", 1) * self.dt if self.dt else None
@@ -78,21 +102,19 @@ class LIFCellMeterWrapper:
                           v_leak= torch.as_tensor(0.0),
                           v_th= torch.as_tensor(1.0),
                           v_reset= torch.as_tensor(0.0))
-        self.lif_cell = LIFCell(p, self.dt)
+        self.lif_cells = LIFCell(p=p, dt=self.dt)
 
-
-class LIFCellPolyrhythm:
-    def __init__(self, lif_cells_meter_wrappers):
-        self.lif_cells = lif_cells_meter_wrappers
-        self.meters = [wrapper.meter_params for wrapper in lif_cells_meter_wrappers]
 
 class RhythmicStructure:
-    def __init__(self, cell_amount=136):
-        self.cell_amount = cell_amount
+    def __init__(self):
+        self.cell_amount = len(POLYRHYTHM_MATRIX)
         self.current_pattern = None
         self.spike = False
-        self.tuning_parameters = [{"meters": str(i) + "_" + str(POLYRHYTHM_MATRIX[i % len(POLYRHYTHM_MATRIX)]), "tempo": 60} for i in range(cell_amount)]
-        self.lif_cell_wrappers = [LIFCellMeterWrapper(params) for params in self.tuning_parameters]
+        self.lif_cell_wrappers = [LIFCellMeterWrapper(LIFCell(p=LIFParameters(tau_syn_inv= torch.as_tensor(1/0.005),
+                                                                                  tau_mem_inv= torch.as_tensor(1/0.02),
+                                                                                  v_leak= torch.as_tensor(0.0),
+                                                                                  v_th= torch.as_tensor(1.0),
+                                                                                  v_reset= torch.as_tensor(0.0)), dt=60/(60*16))) for params in self.tuning_parameters]
         self._tune_cells(self.tuning_parameters)
 
     def _tune_cells(self, tuning_parameters=None):
@@ -111,14 +133,18 @@ class RhythmicStructure:
         return self.spike
 
     def generate_event(self):
-        self.spike = any(wrapper.lif_cell.spike for wrapper in self.lif_cell_wrappers)
+        self.spike = any(wrapper.lif_cells.spike for wrapper in self.lif_cell_wrappers if hasattr(wrapper.lif_cells, 'spike'))
         return self.spike
 
 class LowLevelEventGenerator:
-    def __init__(self, cell_amount=64):
+    def __init__(self, cell_amount=128):
         self.cell_amount = cell_amount
         self.spike = False
-        self.lif_cells = torch.nn.ModuleList([LIFCell() for _ in range(cell_amount)])
+        self.lif_cells = torch.nn.ModuleList([LIFCell(p=LIFParameters(tau_syn_inv= torch.as_tensor(1/0.005),
+                                                                     tau_mem_inv= torch.as_tensor(1/0.02),
+                                                                     v_leak= torch.as_tensor(0.0),
+                                                                     v_th= torch.as_tensor(1.0),
+                                                                     v_reset= torch.as_tensor(0.0)), dt=60/(60*16)) for _ in range(cell_amount)])
 
     def generate_event(self, musical_form_spike, rhythmic_structure_spike):
         self.spike = musical_form_spike or rhythmic_structure_spike
